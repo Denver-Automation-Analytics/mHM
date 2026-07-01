@@ -42,6 +42,31 @@ See also the [documentation][5] for detailed instructions to setup mHM.
 3. Explore the results in the [output directory](test_domain/), e.g. by using the NetCDF viewer `ncview`.
 
 
+## Devcontainer
+
+1. Build the devcontainer in VSCode. This creates a containerized linux environment: 
+
+    - Based on continuumio/miniconda3
+    - mhm-dev conda env from conda-forge with all required build deps: compilers (gfortran/gcc/g++), cmake, make ninja, pkg-config, netcdf-fortran, fypp, git.
+    - CMAKE_PREFIX_PATH set to the conda env so CMake resolves NetCDF-Fortran automatically
+    - Default CMake generator: Ninja, output dir: ./build
+    - Pre-installed extensions: Fortran linter, CMake Tools, Python
+
+2. Run the following command in the terminal:
+
+    cmake -S . -B build -G Ninja
+    cmake --build build
+
+    - B build tells CMake to put all generated build files in the build directory (out-of-source build).
+    - G Ninja selects Ninja as the build system generator.
+    - cmake --build build uses the generated build system in build (Ninja here) to actually compile and link targets.
+
+3. Run mHM on the test domain from the terminal:
+
+    cd /workspace/test_domain
+    ../build/mhm
+
+
 ## License
 
 LGPLv3 (c) 2005-2025 mHM-Developers

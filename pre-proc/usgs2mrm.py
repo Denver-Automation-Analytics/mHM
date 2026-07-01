@@ -49,7 +49,6 @@ Modified,
          
 """
 if __name__ == '__main__':
-    import numpy as np
     from re import search
     from sys import stdout
 
@@ -108,7 +107,7 @@ timestep is going to be issued, but the values are used nevertheless.
     del parser, args
 
     # factor for convert ft^3 in mm^3
-    if np.int(convert) == 1:
+    if int(convert) == 1:
         ft2m = 0.3048 # one ft is 0.3048 m
     else:
         ft2m = 1.
@@ -126,10 +125,10 @@ timestep is going to be issued, but the values are used nevertheless.
     # create list for dates 
     date = list()
     # create array for measurements
-    value = np.zeros(Ndata)
+    value = [0.0] * Ndata
 
     # read value and date
-    for ii in np.arange(Ndata):
+    for ii in range(Ndata):
         readStr = indata[headlines + ii].split('\t')
         if readStr[-1] != 'A\n':
             print('***Warning: value at date ' + readStr[2] + ' is not approved!')
@@ -137,7 +136,7 @@ timestep is going to be issued, but the values are used nevertheless.
         if readStr[3] == '':
             value[ii] = nodata
         else:
-            value[ii] = np.float(readStr[3]) * ft2m
+            value[ii] = float(readStr[3]) * ft2m
 
     # open standard out
     if outfile != '':
@@ -151,7 +150,7 @@ timestep is going to be issued, but the values are used nevertheless.
     fo.write('start  ' + date[0] + ' 00 00   (YYYY MM DD HH MM)\n')
     fo.write('end    ' + date[-1] + ' 00 00   (YYYY MM DD HH MM)\n')
     # write data
-    for ii in np.arange(Ndata):
+    for ii in range(Ndata):
         writeStr = date[ii] + '  00  00{:11.3f}\n'.format(value[ii])
         fo.write(writeStr)
     if outfile != '':
