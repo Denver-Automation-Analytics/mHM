@@ -66,6 +66,20 @@ See also the [documentation][5] for detailed instructions to setup mHM.
     cd /workspace/test_domain
     ../build/mhm
 
+4. Run mHM on a pre-calibrated basin from Rokovec et al (2019)
+
+    - Populate the run_mhm_config.json file with the required data paths
+    - Run the script run_mhm.py
+
+    What the script does:
+
+    Validates the config — checks all paths exist, dates are valid, gauge files are present, binary is executable
+    Creates a temp working dir (or work_dir from config if specified) — the calib_001/ folder is never modified
+    Copies mhm_parameter.nml (calibrated parameters) verbatim from calib_001/exe/
+    Patches mhm.nml using regex substitution across 22 keys (directories, dates, timestep, time_step_model_inputs, warming_days) and regenerates the &evaluation_gauges block from the gauges list — supports any number of gauges
+    Patches mhm_outputs.nml to ensure outputFlxState(11)=.TRUE. (L1_total_runoff)
+    Runs the mHM binary via subprocess, streams output, checks for "mHM: Finished!"
+    Reports the output path and lists the NetCDF files produced; cleans up the temp dir unless keep_work_dir: true
 
 ## License
 

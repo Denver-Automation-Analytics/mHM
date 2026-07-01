@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Example config for run_mhm.py.",
+    "Meteo inputs must follow the test_domain format: one NetCDF per variable",
+    "  <dir_precipitation>/pre.nc, <dir_temperature>/tavg.nc, <dir_reference_et>/pet.nc",
+    "Static inputs (morphology, land cover, lat/lon) are basin-specific and must be",
+    "  provided by the user. Paths below use the test_domain as a structural reference.",
+    "Pre-calibrated parameters are loaded automatically from calib_001/ for the basin."
+  ],
+
+  "basin_id": "01022500",
+  "basins_root": "/workspace/rakovec_JGRA_2019/mHM_basins",
+  "mhm_binary": "/workspace/build/mhm",
+
+  "meteo": {
+    "dir_precipitation": "/path/to/basin/input/meteo/pre/",
+    "dir_temperature":   "/path/to/basin/input/meteo/tavg/",
+    "dir_reference_et":  "/path/to/basin/input/meteo/pet/"
+  },
+
+  "static_inputs": {
+    "dir_morpho":       "/path/to/basin/input/morph/",
+    "dir_lcover":       "/path/to/basin/input/luse/",
+    "dir_common_files": "/path/to/basin/input/morph/",
+    "file_latlon":      "/path/to/basin/input/latlon/latlon_0p125.nc",
+    "dir_gauges":       "/path/to/basin/input/gauge/",
+    "gauges": [
+      {"id": 1022500, "filename": "01022500.txt"}
+    ]
+  },
+
+  "simulation": {
+    "start_date":             "1990-01-01",
+    "end_date":               "2000-12-31",
+    "warming_days":           365,
+    "timestep":               1,
+    "time_step_model_inputs": 0
+  },
+
+  "output_dir":    "/path/to/output/01022500/",
+  "work_dir":      null,
+  "keep_work_dir": false
+}
