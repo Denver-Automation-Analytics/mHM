@@ -28,5 +28,5 @@
     "PATH": "/opt/conda/envs/mhm-dev/bin:${containerEnv:PATH}",
     "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev"
   },
-  "postCreateCommand": "echo 'mHM dev container ready. Build with: cmake -S . -B build -G Ninja && cmake --build build'"
+  "postCreateCommand": "echo 'mHM dev container ready. Conda env: .devcontainer/env.yaml. Build with: cmake -S . -B build -G Ninja && cmake --build build'"
 }

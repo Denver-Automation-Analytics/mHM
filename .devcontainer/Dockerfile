@@ -8,17 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create the mHM development conda environment
-RUN conda create -y -n mhm-dev -c conda-forge \
-    compilers \
-    pkg-config \
-    cmake \
-    make \
-    ninja \
-    netcdf-fortran \
-    fypp \
-    git \
-    && conda clean -afy
+# Create the mHM development conda environment from a declarative env file
+COPY .devcontainer/env.yaml /tmp/env.yaml
+RUN conda env create -f /tmp/env.yaml && conda clean -afy
 
 # Make conda activate work in non-interactive shells and activate mhm-dev by default
 RUN echo "source /opt/conda/etc/profile.d/conda.sh && conda activate mhm-dev" >> /etc/bash.bashrc \
