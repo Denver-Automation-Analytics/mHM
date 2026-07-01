@@ -1,0 +1,32 @@
+{
+  "name": "mHM Linux Dev Environment",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "fortran-lang.linter-gfortran",
+        "ekibun.fortranbreaker",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "ms-python.python"
+      ],
+      "settings": {
+        "cmake.configureOnOpen": true,
+        "cmake.generator": "Ninja",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        "fortran.linter.compiler": "gfortran",
+        "fortran.linter.compilerPath": "/opt/conda/envs/mhm-dev/bin/gfortran"
+      }
+    }
+  },
+  "remoteEnv": {
+    "PATH": "/opt/conda/envs/mhm-dev/bin:${containerEnv:PATH}",
+    "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev"
+  },
+  "postCreateCommand": "echo 'mHM dev container ready. Build with: cmake -S . -B build -G Ninja && cmake --build build'"
+}
