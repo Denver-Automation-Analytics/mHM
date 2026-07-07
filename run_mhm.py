@@ -10,7 +10,7 @@ Usage:
     python run_mhm.py run_mhm_config.json
 
 Outputs include mHM_Fluxes_States.nc containing spatially distributed fluxes and states,
-including L1_total_runoff (total surface runoff per grid cell, [mm/timestep]).
+including Q (total surface runoff per grid cell, L1_total_runoff, [mm/timestep]).
 
 Meteo inputs must follow the test_domain format:
     <dir_precipitation>/pre.nc
@@ -417,8 +417,8 @@ def run(config_path: str) -> None:
             for f in nc_files:
                 print(f"  {f.name}")
             print(
-                "\nNote: L1_total_runoff (total surface runoff [mm/timestep]) is available\n"
-                "      in mHM_Fluxes_States.nc as variable 'total_runoff'."
+                "\nNote: Total surface runoff (L1_total_runoff) is available in\n"
+                "      mHM_Fluxes_States.nc as variable 'Q' [mm/month or mm/day]."
             )
 
     finally:
