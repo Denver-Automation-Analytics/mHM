@@ -1,13 +1,38 @@
 """Output writers for mHM meteo NetCDFs and header.txt files."""
 
 from __future__ import annotations
+import json
 import logging
+import numbers
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
 log = logging.getLogger(__name__)
+
+
+def _sanitize_attr_value(value):
+    """Convert attrs to NetCDF-safe scalar/list-like values."""
+    if isinstance(value, dict):
+        return json.dumps(value, default=str, sort_keys=True)
+    if isinstance(value, set):
+        return sorted(value)
+    if isinstance(value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)):
+        return value
+    return str(value)
+
+
+def _sanitize_dataset_attrs(ds: xr.Dataset) -> xr.Dataset:
+    """Return a copy with attrs normalized for NetCDF serialization."""
+    out = ds.copy(deep=False)
+    out.attrs = {k: _sanitize_attr_value(v) for k, v in out.attrs.items()}
+
+    for name in out.variables:
+        out[name].attrs = {k: _sanitize_attr_value(v) for k, v in out[name].attrs.items()}
+
+    return out
 
 
 def write_meteo(ds: xr.Dataset,
@@ -31,7 +56,8 @@ def write_meteo(ds: xr.Dataset,
             "calendar": "standard",
         },
     }
-    ds.to_netcdf(out_path, encoding=encoding, format="NETCDF4")
+    ds_safe = _sanitize_dataset_attrs(ds)
+    ds_safe.to_netcdf(out_path, encoding=encoding, format="NETCDF4")
     log.info("Wrote %s", out_path)
 
 

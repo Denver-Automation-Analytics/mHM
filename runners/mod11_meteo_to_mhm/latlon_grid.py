@@ -41,8 +41,10 @@ def _load_header(header: HeaderLike) -> dict:
             line = line.strip()
             if not line:
                 continue
-            key, val = line.split()
-            parsed[key] = val
+            parts = line.split()
+            if parts[0][0].isdigit() or parts[0][0] == "-":
+                break  # hit the data rows of an .asc file
+            parsed[parts[0]] = parts[1]
 
     # normalize types
     return {
