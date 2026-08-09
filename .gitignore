@@ -17,6 +17,8 @@ latex
 doxygen_warn.txt
 
 # Exclusions
+cache
+test_domain_3
 mhm
 !pybind/src/mhm
 mhm_debug
