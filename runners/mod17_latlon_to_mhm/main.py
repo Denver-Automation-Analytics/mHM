@@ -18,13 +18,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "mod11_meteo_to_mhm"))
-from latlon_grid import create_latlon  # noqa: E402
+from latlon_grid import create_latlon, derive_l_header  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import L1_CELL_SIZE_M  # noqa: E402
 
 # ---- USER INPUTS --------------------------------------------------
 TARGET_CRS  = "EPSG:5070"
 L0_HEADER   = "/workspace/test_domain_3/input/morph/dem.nc"
-L1_HEADER   = "/workspace/test_domain_3/input/morph/soil_class.asc"
-L11_HEADER  = L1_HEADER
 OUTPUT_DIR  = "/workspace/test_domain_3/input/latlon"
 # -------------------------------------------------------------------
 
@@ -43,8 +44,8 @@ def _require(path: str, module: str) -> Path:
 
 if __name__ == "__main__":
     l0  = _require(L0_HEADER,  "mod10_dem_to_mhm")
-    l1  = _require(L1_HEADER,  "mod14_soils_to_mhm")
-    l11 = _require(L11_HEADER, "mod14_soils_to_mhm")
+    l1  = derive_l_header(l0, L1_CELL_SIZE_M)
+    l11 = l1
 
     out_root = Path(OUTPUT_DIR)
     out_root.mkdir(parents=True, exist_ok=True)

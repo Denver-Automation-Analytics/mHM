@@ -10,7 +10,7 @@ import os
 import gc
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, OUTPUT_CRS
 import geopandas as gpd
 import netCDF4 as nc4
 import overflow
@@ -201,6 +201,240 @@ def _warp_to_l0(src_tif: str, dst_tif: str, resample_alg: str,
     )
 
 
+def _condition_fdir_for_mhm(dem_nc: str, fdir_nc: str, facc_nc: str,
+                              l0_cellsize_m: float, l1_cellsize_m: float) -> None:
+    """Break fdir cycles and fix L11 boundary exits so mHM initialises without errors."""
+    D8 = {1: (0,1), 2: (1,1), 4: (1,0), 8: (1,-1),
+          16: (0,-1), 32: (-1,-1), 64: (-1,0), 128: (-1,1)}
+    # exit direction sets per block side, and the outward fdir to force if no exit exists
+    EXIT_DIRS = {
+        'top':    ({32, 64, 128}, 64),
+        'right':  ({1, 2, 128},    1),
+        'bottom': ({2, 4, 8},      4),
+        'left':   ({8, 16, 32},   16),
+    }
+    cell_factor = int(round(l1_cellsize_m / l0_cellsize_m))
+
+    with nc4.Dataset(dem_nc) as ds:
+        dem = np.array(ds['dem'][:])
+        fv_dem = float(ds['dem']._FillValue)
+    with nc4.Dataset(facc_nc) as ds:
+        facc = np.array(ds['facc'][:])
+
+    with nc4.Dataset(fdir_nc, 'r+') as ds_fdir:
+        fdir = np.array(ds_fdir['fdir'][:])
+        fv_fdir = int(ds_fdir['fdir']._FillValue)
+        nrows, ncols = fdir.shape
+        dem_mask = (dem != fv_dem) & ~np.isnan(dem)
+
+        # ── Fix 1: break all fdir cycles ─────────────────────────────────────
+        cycle_fixes = 0
+        for _pass in range(20):
+            valid = dem_mask & (fdir != fv_fdir)
+            facc_v = np.where(valid, facc, -1)
+            visited = np.zeros((nrows, ncols), dtype=bool)
+            in_cycle = np.zeros((nrows, ncols), dtype=bool)
+            for sr in range(nrows):
+                for sc in range(ncols):
+                    if not valid[sr, sc] or visited[sr, sc]:
+                        continue
+                    path, path_set = [], {}
+                    r, c = sr, sc
+                    while True:
+                        if not (0 <= r < nrows and 0 <= c < ncols) or not valid[r, c]:
+                            break
+                        if (r, c) in path_set:
+                            for pr, pc in path[path_set[(r, c)]:]:
+                                in_cycle[pr, pc] = True
+                            break
+                        path_set[(r, c)] = len(path)
+                        path.append((r, c))
+                        d = fdir[r, c]
+                        if d not in D8:
+                            break
+                        dr, dc = D8[d]
+                        r, c = r + dr, c + dc
+                    for pr, pc in path:
+                        visited[pr, pc] = True
+            if not in_cycle.any():
+                break
+            checked = np.zeros((nrows, ncols), dtype=bool)
+            for r in range(nrows):
+                for c in range(ncols):
+                    if not in_cycle[r, c] or checked[r, c]:
+                        continue
+                    group, cr, cc = [], r, c
+                    for _step in range(nrows * ncols):
+                        if checked[cr, cc]:
+                            break
+                        checked[cr, cc] = True
+                        group.append((cr, cc))
+                        d = fdir[cr, cc]
+                        if d not in D8:
+                            break
+                        dr, dc = D8[d]
+                        rn, cn = cr + dr, cc + dc
+                        if not (0 <= rn < nrows and 0 <= cn < ncols) or not in_cycle[rn, cn]:
+                            break
+                        cr, cc = rn, cn
+                    mn = min(group, key=lambda p: facc_v[p[0], p[1]])
+                    fdir[mn[0], mn[1]] = 0
+                    cycle_fixes += 1
+        if cycle_fixes:
+            print(f'  Broke {cycle_fixes} fdir cycle groups')
+
+        # ── Fix 2: ensure every active L11 cell has an outward boundary cell ─
+        fdir_eff = fdir.copy()
+        fdir_eff[~dem_mask] = fv_fdir
+        facc_eff = np.where(dem_mask, facc, -1)
+        nrows_l11 = -(-nrows // cell_factor)
+        ncols_l11 = -(-ncols // cell_factor)
+        l11_fixes = 0
+        for ic in range(nrows_l11):
+            for jc in range(ncols_l11):
+                iu = ic * cell_factor
+                id_ = min(iu + cell_factor, nrows)
+                jl = jc * cell_factor
+                jr = min(jl + cell_factor, ncols)
+                if not dem_mask[iu:id_, jl:jr].any():
+                    continue
+                # Simulate mHM first loop: outlet = downstream cell outside domain or fdir<=0
+                outlet_max = -1
+                for r in range(iu, id_):
+                    for c in range(jl, jr):
+                        if not dem_mask[r, c]:
+                            continue
+                        d = fdir_eff[r, c]
+                        if d in D8:
+                            dr, dc = D8[d]; r2, c2 = r + dr, c + dc
+                            if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
+                                outlet_max = max(outlet_max, facc_eff[r, c])
+                        elif d <= 0:
+                            outlet_max = max(outlet_max, facc_eff[r, c])
+                blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
+                if outlet_max == blk_max:
+                    continue  # first loop will set rowOut correctly
+                # First loop won't handle this block — redirect the max-facc boundary cell to
+                # exit unconditionally. This guarantees mHM's second loop always finds a valid
+                # outward-pointing boundary cell, regardless of what the existing fdir values are.
+                b_max, b_r, b_c, b_side = -1, -1, -1, None
+                for side_name, (_, out_dir) in EXIT_DIRS.items():
+                    for r, c in (
+                        [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
+                        [(ii, jr-1) for ii in range(iu, id_)] if side_name == 'right' else
+                        [(id_-1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
+                        [(ii, jl) for ii in range(iu, id_)]
+                    ):
+                        if dem_mask[r, c] and facc_eff[r, c] > b_max:
+                            b_max, b_r, b_c, b_side = facc_eff[r, c], r, c, side_name
+                if b_r >= 0:
+                    fdir[b_r, b_c] = EXIT_DIRS[b_side][1]
+                    fdir_eff[b_r, b_c] = EXIT_DIRS[b_side][1]
+                    l11_fixes += 1
+        if l11_fixes:
+            print(f'  Fixed {l11_fixes} L11 cells with no outward boundary exit')
+
+        # ── Fix 3: fallback for blocks with NO boundary domain cells (b_r==-1 above).
+        # Setting fdir=0 makes mHM's first loop treat the max-facc interior cell as an
+        # outlet, bypassing the second-loop boundary search entirely.
+        # Converges because fdir=0 assignments are monotone (never un-done).
+        fix3_count = 0
+        changed = True
+        while changed:
+            changed = False
+            for ic in range(nrows_l11):
+                for jc in range(ncols_l11):
+                    iu = ic * cell_factor
+                    id_ = min(iu + cell_factor, nrows)
+                    jl = jc * cell_factor
+                    jr = min(jl + cell_factor, ncols)
+                    if not dem_mask[iu:id_, jl:jr].any():
+                        continue
+                    outlet_max = -1
+                    for r in range(iu, id_):
+                        for c in range(jl, jr):
+                            if not dem_mask[r, c]:
+                                continue
+                            d = fdir_eff[r, c]
+                            if d in D8:
+                                dr, dc = D8[d]; r2, c2 = r + dr, c + dc
+                                if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
+                                    outlet_max = max(outlet_max, facc_eff[r, c])
+                            elif d <= 0:
+                                outlet_max = max(outlet_max, facc_eff[r, c])
+                    blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
+                    if outlet_max == blk_max:
+                        continue
+                    found = any(
+                        dem_mask[r, c] and fdir_eff[r, c] in dirs
+                        for side_name, (dirs, _) in EXIT_DIRS.items()
+                        for r, c in (
+                            [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
+                            [(ii, jr - 1) for ii in range(iu, id_)] if side_name == 'right' else
+                            [(id_ - 1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
+                            [(ii, jl) for ii in range(iu, id_)]
+                        )
+                    )
+                    if found:
+                        continue
+                    sub = facc_eff[iu:id_, jl:jr]
+                    lr, lc = np.unravel_index(np.argmax(sub), sub.shape)
+                    mr, mc = iu + lr, jl + lc
+                    if dem_mask[mr, mc] and fdir_eff[mr, mc] != 0:
+                        fdir[mr, mc] = 0
+                        fdir_eff[mr, mc] = 0
+                        changed = True
+                        fix3_count += 1
+        if fix3_count:
+            print(f'  Forced {fix3_count} interior outlet cells for remaining L11 failures')
+
+        # Final verification: confirm every active L11 block is handled
+        n_first, n_second, n_failed = 0, 0, 0
+        for ic in range(nrows_l11):
+            for jc in range(ncols_l11):
+                iu = ic * cell_factor
+                id_ = min(iu + cell_factor, nrows)
+                jl = jc * cell_factor
+                jr = min(jl + cell_factor, ncols)
+                if not dem_mask[iu:id_, jl:jr].any():
+                    continue
+                outlet_max = -1
+                for r in range(iu, id_):
+                    for c in range(jl, jr):
+                        if not dem_mask[r, c]:
+                            continue
+                        d = fdir_eff[r, c]
+                        if d in D8:
+                            dr, dc = D8[d]; r2, c2 = r + dr, c + dc
+                            if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
+                                outlet_max = max(outlet_max, facc_eff[r, c])
+                        elif d <= 0:
+                            outlet_max = max(outlet_max, facc_eff[r, c])
+                blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
+                if outlet_max == blk_max:
+                    n_first += 1
+                    continue
+                found_any = any(
+                    dem_mask[r, c] and fdir_eff[r, c] in dirs
+                    for side_name, (dirs, _) in EXIT_DIRS.items()
+                    for r, c in (
+                        [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
+                        [(ii, jr - 1) for ii in range(iu, id_)] if side_name == 'right' else
+                        [(id_ - 1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
+                        [(ii, jl) for ii in range(iu, id_)]
+                    )
+                )
+                if found_any:
+                    n_second += 1
+                else:
+                    n_failed += 1
+                    print(f'  WARNING: L11 block ({ic},{jc}) still unhandled after all fixes')
+        print(f'  Verification: {n_first} blocks via first loop, {n_second} via second loop, {n_failed} still unhandled')
+
+        ds_fdir['fdir'][:] = fdir
+        print(f'  fdir.nc conditioning complete')
+
+
 if __name__ == "__main__":
 
     # ---- USER INPUTS --------------------------------------------------
@@ -298,3 +532,6 @@ if __name__ == "__main__":
     write_nc(f"{l0_dir}/aspect_l0.tif", f"{MORPH_DIR}/aspect.nc", dtype="float32", var_name="aspect", block_size=CHUNK_SIZE)
     write_nc(f"{l0_dir}/fdir_l0.tif",   f"{MORPH_DIR}/fdir.nc",   dtype="int32",   var_name="fdir",   block_size=CHUNK_SIZE)
     write_nc(f"{l0_dir}/facc_l0.tif",   f"{MORPH_DIR}/facc.nc",   dtype="int32",   var_name="facc",   block_size=CHUNK_SIZE)
+    # Note: fdir conditioning (Fix 1/2/3) is applied in mod18 AFTER it remaps the
+    # pysheds-encoded fdir to ArcGIS D8 powers-of-2.  Do not condition here since
+    # the direction encoding at this stage is pysheds sequential (0–8), not ArcGIS.

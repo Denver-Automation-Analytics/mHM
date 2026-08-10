@@ -23,10 +23,12 @@ except ImportError as exc:
         "Install it in your environment (e.g. `pip install rioxarray`)."
     ) from exc
 
+from affine import Affine
 from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import OUTPUT_CRS, L2_CELL_SIZE_M
+from latlon_grid import mhm_l2_from_l0
 
 from hrrr_access   import open_hrrr, resolve_init_time, select_window
 from io_watershed  import load_and_prepare_watershed, snap_bbox_to_grid
@@ -86,11 +88,18 @@ def main() -> None:
     log.info("Clipped grid shape (y, x): (%d, %d)",
              ds_clip.sizes["y"], ds_clip.sizes["x"])
 
-    # 4b. Reproject to the authoritative OUTPUT_CRS at L2 resolution
+    # 4b. Reproject to the exact L2 grid that mHM derives from L0 at runtime
     if ds_clip.rio.crs is None:
         ds_clip = ds_clip.rio.set_crs(hrrr_crs)
+    l2 = mhm_l2_from_l0(L0_DEM, L2_CELL_SIZE_M)
+    _cs = l2["cellsize"]
+    _target_transform = Affine(_cs, 0.0, l2["xllcorner"],
+                               0.0, -_cs, l2["yllcorner"] + l2["nrows"] * _cs)
     ds_reproj = ds_clip.rio.reproject(
-        OUTPUT_CRS, resolution=L2_CELL_SIZE_M, resampling=Resampling.bilinear
+        OUTPUT_CRS,
+        shape=(l2["nrows"], l2["ncols"]),
+        transform=_target_transform,
+        resampling=Resampling.bilinear,
     )
     # precipitation uses sum resampling to preserve mass
     pre_sum = ds_clip[["precipitation_surface"]].rio.reproject_match(
@@ -103,8 +112,8 @@ def main() -> None:
     # 5. Format to mHM contract (rename, units check, time-as-int, DOUBLE, fill)
     ds_mhm, ref_time = format_for_mhm(ds_reproj, init_time, NODATA)
 
-    # 6. Derive header dict from the reprojected grid
-    header = build_header(ds_reproj, NODATA)
+    # 6. Header from mhm_l2_from_l0 — same grid mHM derives internally
+    header = {**l2, "NODATA_value": int(NODATA)}
     assert_grid_consistency(ds_reproj, header, L2_CELL_SIZE_M)
 
     # 7. Write outputs
@@ -126,22 +135,12 @@ def main() -> None:
     log.info("Done. Outputs in %s", meteo_out_root)
 
 
-def build_header(ds_reproj, nodata):
-    xll, yll, _xur, _yur = ds_reproj.rio.bounds()
-    x_res, _y_res = ds_reproj.rio.resolution()
-    return {
-        "ncols":        int(ds_reproj.sizes["x"]),
-        "nrows":        int(ds_reproj.sizes["y"]),
-        "xllcorner":    float(xll),
-        "yllcorner":    float(yll),
-        "cellsize":     int(round(abs(x_res))),
-        "NODATA_value": int(nodata),
-    }
 
 
 if __name__ == "__main__":
     # ---- USER INPUTS ---------------------------------------------------
     WATERSHED_PATH   = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"     # .shp / .geojson / .gpkg
+    L0_DEM           = "/workspace/test_domain_3/input/morph/dem.nc"
     INIT_TIME        = "latest"                      # "latest" or "YYYY-MM-DDTHH" (UTC)
     METEO_OUTPUT_DIR       = "/workspace/test_domain_3/input/meteo"  # output directory for mHM-ready files
     LATLON_OUTPUT_DIR      = "/workspace/test_domain_3/input/latlon" # output directory for latlon.nc

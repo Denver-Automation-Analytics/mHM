@@ -12,6 +12,7 @@ Migrated from mHM's pre-proc/create_latlon.py:
 
 from __future__ import annotations
 import logging
+import math
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -244,6 +245,77 @@ def _write_level_chunked(
         lon_var[row0:row1, :] = lons
         lat_var[row0:row1, :] = lats
         log.debug("lat/lon%s: rows %d–%d / %d", sfx, row0, row1, nrows)
+
+
+# --------------------------------------------------------------------------- #
+# Grid-level header derivation
+# --------------------------------------------------------------------------- #
+def _mhm_nint(x: float) -> int:
+    """Fortran NINT: round half away from zero (matches mHM's calculate_grid_properties)."""
+    return math.floor(x + 0.5) if x >= 0.0 else math.ceil(x - 0.5)
+
+
+def derive_l_header(l0_header: HeaderLike, target_cellsize: float) -> dict:
+    """Return a coarser-grid header derived from *l0_header*.
+
+    Rounds up so the derived grid fully covers the L0 extent.
+    """
+    h = _load_header(l0_header)
+    scale = target_cellsize / h["cellsize"]
+    return {
+        "ncols":        math.ceil(h["ncols"] / scale),
+        "nrows":        math.ceil(h["nrows"] / scale),
+        "xllcorner":    h["xllcorner"],
+        "yllcorner":    h["yllcorner"],
+        "cellsize":     float(target_cellsize),
+        "NODATA_value": h["NODATA_value"],
+    }
+
+
+def mhm_l2_from_l0(l0_header: HeaderLike, l2_cellsize: float) -> dict:
+    """Derive the mHM level-2 (meteo) grid header from an L0 header.
+
+    Replicates Fortran's ``calculate_grid_properties`` so the Python meteo
+    runner produces exactly the same L2 extent that mHM infers at runtime.
+
+    mHM internally stores (ncols = y/N-S size, nrows = x/E-W size); this
+    function returns a standard Python/ESRI-ASCII dict (ncols=x, nrows=y).
+    """
+    h = _load_header(l0_header)
+    cell_factor = l2_cellsize / h["cellsize"]
+    rounded = round(cell_factor)
+    if abs(rounded - cell_factor) > 1e-7:
+        raise ValueError(
+            f"l2_cellsize={l2_cellsize} is not an integer multiple of "
+            f"l0_cellsize={h['cellsize']}"
+        )
+    # mHM convention: ncols_in = h["nrows"] (y/N-S), nrows_in = h["ncols"] (x/E-W)
+    mhm_ncols_in = h["nrows"]
+    mhm_nrows_in = h["ncols"]
+
+    mhm_ncols_out = _mhm_nint(mhm_ncols_in / cell_factor)
+    if mhm_ncols_out * rounded < mhm_ncols_in:
+        mhm_ncols_out += 1
+
+    mhm_nrows_out = _mhm_nint(mhm_nrows_in / cell_factor)
+    if mhm_nrows_out * rounded < mhm_nrows_in:
+        mhm_nrows_out += 1
+
+    xll = (h["xllcorner"]
+           + mhm_ncols_in * l2_cellsize / rounded
+           - mhm_ncols_out * l2_cellsize)
+    yll = (h["yllcorner"]
+           + mhm_nrows_in * l2_cellsize / rounded
+           - mhm_nrows_out * l2_cellsize)
+
+    return {
+        "ncols":        mhm_nrows_out,   # x / E-W extent
+        "nrows":        mhm_ncols_out,   # y / N-S extent
+        "xllcorner":    xll,
+        "yllcorner":    yll,
+        "cellsize":     float(l2_cellsize),
+        "NODATA_value": h["NODATA_value"],
+    }
 
 
 # --------------------------------------------------------------------------- #

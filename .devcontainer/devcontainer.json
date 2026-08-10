@@ -19,6 +19,7 @@
         "cmake.configureOnOpen": true,
         "cmake.generator": "Ninja",
         "cmake.buildDirectory": "${workspaceFolder}/build",
+        "cmake.configureArgs": ["-DCMAKE_WITH_OpenMP=ON"],
         "fortran.linter.compiler": "gfortran",
         "fortran.linter.compilerPath": "/opt/conda/envs/mhm-dev/bin/gfortran"
       }
@@ -28,5 +29,5 @@
     "PATH": "/opt/conda/envs/mhm-dev/bin:${containerEnv:PATH}",
     "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev"
   },
-  "postCreateCommand": "echo 'mHM dev container ready. Conda env: .devcontainer/env.yaml. Build with: cmake -S . -B build -G Ninja && cmake --build build'"
+  "postCreateCommand": "echo 'mHM dev container ready. Conda env: .devcontainer/env.yaml. Build with: cmake -S . -B build -G Ninja -DCMAKE_WITH_OpenMP=ON && cmake --build build'"
 }

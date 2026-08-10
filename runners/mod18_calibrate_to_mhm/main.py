@@ -1,14 +1,17 @@
 """
 mHM calibration assembler.
 
-Validates all outputs from mod10–mod16, introspects grid metadata, writes a
+Validates all outputs from mod10–mod17, introspects grid metadata, writes a
 calibration-ready mhm.nml (optimize=.TRUE.) plus companion namelists into the
 domain directory, then launches the mHM binary and streams its output.
 
-Run order: mod10 → mod11 → mod12 → mod13 → mod14 → mod15 → mod16 → mod17.
+Run order: mod10 → mod11 → mod12 → mod13 → mod14 → mod15 → mod16 → mod17 → mod18.
 
 mHM invocation: the binary is run with cwd=DOMAIN_DIR so that it finds all
 four nml files without path arguments.
+
+Geology: no dedicated runner exists; _bootstrap_geology() creates a single-class
+placeholder when geology files are absent.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import shutil
 import subprocess
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -33,21 +36,24 @@ MHM_BINARY       = "/workspace/build/mhm"
 
 OPTI_METHOD      = 1     # 1=DDS, 2=Simulated Annealing, 3=SCE
 OPTI_FUNCTION    = 9     # 9=1-KGE(Q); see mhm.nml comments for full list
-N_ITERATIONS     = 1000
+N_ITERATIONS     = 10
 WARMING_DAYS     = 0     # spin-up days before eval period; increase for multi-year meteo
 TIMESTEP         = 1     # model timestep [h]: 1=hourly, 24=daily
-# L1 simulation resolution in metres.  Must be a whole-number multiple of
-# L0_CELL_SIZE_M (runners/config.py) and strictly coarser: 600, 900, 1200, ...
-RESOLUTION_HYDROLOGY = 600
 
 REPO_PARAM_NML   = "/workspace/mhm_parameter.nml"
 REPO_OUTPUT_NML  = "/workspace/mhm_outputs.nml"
 REPO_MRM_OUT_NML = "/workspace/mrm_outputs.nml"
 # ---------------------------------------------------------------------------
 
-if RESOLUTION_HYDROLOGY % L0_CELL_SIZE_M != 0:
+if L2_CELL_SIZE_M % L1_CELL_SIZE_M != 0:
     raise ValueError(
-        f"RESOLUTION_HYDROLOGY={RESOLUTION_HYDROLOGY} is not a whole-number multiple "
+        f"L2_CELL_SIZE_M={L2_CELL_SIZE_M} is not a whole-number multiple "
+        f"of L1_CELL_SIZE_M={L1_CELL_SIZE_M} (runners/config.py)."
+    )
+
+if L1_CELL_SIZE_M % L0_CELL_SIZE_M != 0:
+    raise ValueError(
+        f"L1_CELL_SIZE_M={L1_CELL_SIZE_M} is not a whole-number multiple "
         f"of L0_CELL_SIZE_M={L0_CELL_SIZE_M} (runners/config.py)."
     )
 
@@ -57,34 +63,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("calibrate_to_mhm")
-
-
-# ---------------------------------------------------------------------------
-# Morph NC axis-order repair
-# ---------------------------------------------------------------------------
-
-_MORPH_NC = ("dem.nc", "slope.nc", "aspect.nc", "fdir.nc", "facc.nc")
-
-
-def _fix_morph_nc_axis_order(morph_dir: Path) -> None:
-    """Transpose any (x, y) morph NC file to (y, x) as mHM requires."""
-    import shutil
-    import xarray as xr
-
-    for name in _MORPH_NC:
-        path = morph_dir / name
-        if not path.exists():
-            continue
-        with xr.open_dataset(path) as ds:
-            first_var = next(iter(ds.data_vars))
-            if ds[first_var].dims[0] != "x":
-                continue  # already (y, x)
-        log.info("Fixing axis order (x,y)→(y,x): %s", path)
-        tmp = path.with_suffix(".tmp.nc")
-        with xr.open_dataset(path, chunks={"x": 512, "y": 512}) as ds:
-            ds.transpose("y", "x").to_netcdf(tmp)
-        shutil.move(str(tmp), str(path))
-        log.info("Fixed: %s", path)
 
 
 # ---------------------------------------------------------------------------
@@ -151,43 +129,6 @@ def _bootstrap_geology(morph_dir: Path) -> None:
         log.info("Written: %s", classmap)
 
 
-# LAI monthly values for 3 land-cover classes (South Texas climate):
-#   1 = Forest (riparian/mixed woodland)
-#   2 = Impervious (sealed surfaces — minimal LAI)
-#   3 = Pervious (grassland/shrubland)
-_LAI_CLASSDEF = (
-    "NoLAIclasses           3\n"
-    "ID   LAND-USE        Jan.   Feb.   Mar.   Apr.   May    Jun.   Jul.   Aug.   Sep.   Oct.   Nov.   Dec.\n"
-    " 1    Forest          2.0    2.0    3.0    4.0    5.0    5.5    5.5    5.5    5.0    4.0    2.5    2.0\n"
-    " 2    Impervious      0.01   0.01   0.01   0.01   0.01   0.01   0.01   0.01   0.01   0.01   0.01   0.01\n"
-    " 3    Pervious        0.5    0.5    1.0    1.5    2.0    2.5    2.0    2.0    2.0    1.5    0.8    0.5\n"
-)
-
-
-def _bootstrap_lai(morph_dir: Path, luse_dir: Path) -> None:
-    """Create LAI class files from the land-cover map if absent."""
-    classdef = morph_dir / "LAI_classdefinition.txt"
-    classmap  = morph_dir / "LAI_class.asc"
-    if classdef.exists() and classmap.exists():
-        return
-
-    log.info("Bootstrapping LAI files from land-cover map (3 classes)...")
-
-    if not classdef.exists():
-        classdef.write_text(_LAI_CLASSDEF)
-        log.info("Written: %s", classdef)
-
-    if not classmap.exists():
-        # Reuse lc_2024.asc directly — its class IDs (1,2,3) match our LAI classes
-        import shutil
-        lc_asc = next(luse_dir.glob("lc_*.asc"), None)
-        if lc_asc is None:
-            log.error("No lc_*.asc found in %s — cannot create LAI_class.asc", luse_dir)
-            sys.exit(1)
-        shutil.copy2(lc_asc, classmap)
-        log.info("Written: %s  (copied from %s)", classmap, lc_asc.name)
-
-
 def _ascii_header(path: Path) -> dict:
     """Read the 6-line header of an ESRI ASCII grid, return lowercase-key dict."""
     header = {}
@@ -198,23 +139,22 @@ def _ascii_header(path: Path) -> dict:
     return header
 
 
-def _resample_ascii_to_l0(src_asc: Path, l0_nc: Path) -> None:
-    """Resample a categorical ESRI ASCII grid to the L0 300 m grid in-place.
+def _resample_ascii_to_l0(src_asc: Path, dem_nc: Path) -> None:
+    """Resample a categorical ESRI ASCII grid to the L0 grid in-place.
 
-    Reads the target grid from *l0_nc* (land-cover NC with embedded CRS).
+    Reads the target grid shape from *dem_nc* (mod10 output); CRS is the
+    shared OUTPUT_CRS constant from config.py.
     Uses GDAL Warp with mode resampling (appropriate for class integers).
     Skips the operation when the source header already matches L0.
     """
     from osgeo import gdal
 
-    # --- read L0 target grid params from land-cover NC ----------------------
     import netCDF4 as nc4
     import numpy as np
 
-    with nc4.Dataset(l0_nc) as ds:
+    with nc4.Dataset(dem_nc) as ds:
         x    = ds.variables["x"][:]
         y    = ds.variables["y"][:]
-        crs_wkt = str(ds.variables["crs"].spatial_ref)
     xres  = float(x[1] - x[0])
     xmin  = float(x[0])  - xres / 2
     xmax  = float(x[-1]) + xres / 2
@@ -249,7 +189,7 @@ def _resample_ascii_to_l0(src_asc: Path, l0_nc: Path) -> None:
     src_ds = mem.Create("", src_ncols, src_nrows, 1, gdal.GDT_Int32)
     ull_y  = src_yll + src_nrows * src_cellsize      # upper-left y
     src_ds.SetGeoTransform((src_xll, src_cellsize, 0.0, ull_y, 0.0, -src_cellsize))
-    src_ds.SetProjection(crs_wkt)
+    src_ds.SetProjection(OUTPUT_CRS)
     band = src_ds.GetRasterBand(1)
     band.WriteArray(data)
     band.SetNoDataValue(nodata_val)
@@ -262,7 +202,7 @@ def _resample_ascii_to_l0(src_asc: Path, l0_nc: Path) -> None:
         outputBounds=(xmin, ymin, xmax, ymax),
         xRes=xres,
         yRes=xres,
-        dstSRS=crs_wkt,
+        dstSRS=OUTPUT_CRS,
         resampleAlg="mode",
         dstNodata=nodata_val,
     )
@@ -283,7 +223,7 @@ def _resample_ascii_to_l0(src_asc: Path, l0_nc: Path) -> None:
     log.info("Resampled %s → %d×%d @ %d m", src_asc.name, ncols, nrows, int(xres))
 
 
-def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path, l0_nc: Path) -> None:
+def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     """Burn gauge local_ids into an L0 ASCII raster in *morph_dir*.
 
     Reads gauge lat/lon from id_map.csv, projects to LCC, snaps each gauge to
@@ -311,14 +251,10 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path, l0_nc: P
         if int(hdr["ncols"]) == ncols and int(hdr["nrows"]) == nrows:
             return
 
-    log.info("Building morph/idgauges.asc at L0 300 m grid …")
-
-    # Read LCC CRS WKT
-    with nc4_mod.Dataset(l0_nc) as ds:
-        crs_wkt = str(ds.variables["crs"].spatial_ref)
+    log.info("Building morph/idgauges.asc at L0 grid …")
 
     # Transform gauges from WGS84 (lon, lat) → LCC (x, y)
-    tf = Transformer.from_crs("EPSG:4326", crs_wkt, always_xy=True)
+    tf = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
 
     # Valid-domain mask (True where DEM has data)
     valid = (dem_vals != dem_fill)
@@ -372,7 +308,8 @@ def _remap_fdir_to_arcgis(morph_dir: Path) -> None:
 
     pysheds: 1=E 2=SE 3=S 4=SW 5=W 6=NW 7=N 8=NE  (0=flat/nodata)
     ArcGIS:  1=E 2=SE 4=S 8=SW 16=W 32=NW 64=N 128=NE  (mHM convention)
-    Skips the operation if the file already uses ArcGIS encoding.
+    Also includes 0 (sink/outlet forced by conditioning) in the valid set.
+    The nodata fill step runs regardless of whether remapping was needed.
     """
     import netCDF4 as nc4_mod
     import numpy as np
@@ -382,20 +319,23 @@ def _remap_fdir_to_arcgis(morph_dir: Path) -> None:
         fdir = np.array(ds.variables["fdir"][:])
         fill = int(ds.variables["fdir"]._FillValue)
 
+    # 0 = sink forced by conditioning; treat as already-valid ArcGIS value
+    arcgis_vals = {0, 1, 2, 4, 8, 16, 32, 64, 128}
     valid = fdir[fdir != fill]
     unique = set(int(v) for v in np.unique(valid))
-    arcgis_vals = {1, 2, 4, 8, 16, 32, 64, 128}
+
     if unique.issubset(arcgis_vals):
-        return   # already ArcGIS encoded
+        out = fdir  # already ArcGIS encoded (or conditioned) — skip remap
+    else:
+        log.info("Remapping fdir.nc: pysheds 0–8 → ArcGIS D8 powers-of-2 …")
+        out = np.full_like(fdir, fill)
+        for src_val, dst_val in _PYSHEDS_TO_ARCGIS.items():
+            mask = fdir == src_val
+            out[mask] = dst_val
 
-    log.info("Remapping fdir.nc: pysheds 0–8 → ArcGIS D8 powers-of-2 …")
-    out = np.full_like(fdir, fill)
-    for src_val, dst_val in _PYSHEDS_TO_ARCGIS.items():
-        mask = fdir == src_val
-        out[mask] = dst_val
-
-    # Fill any remaining nodata within the DEM valid mask using the nearest
-    # valid fdir cell (handles flat/boundary cells that got pysheds value 0).
+    # Always fill nodata within the DEM valid mask (flat/boundary cells).
+    # This is needed both after remapping and on subsequent mod18 runs where
+    # the remap was already done but some DEM-edge cells may still be nodata.
     with nc4_mod.Dataset(morph_dir / "dem.nc") as ds:
         dem_fill = float(ds.variables["dem"]._FillValue)
         dem_arr  = np.array(ds.variables["dem"][:])
@@ -410,10 +350,14 @@ def _remap_fdir_to_arcgis(morph_dir: Path) -> None:
             ~valid_mask, return_distances=True, return_indices=True
         )
         out[broken] = out[nr[broken], nc_[broken]]
-
-    with nc4_mod.Dataset(fdir_nc, "r+") as ds:
-        ds.variables["fdir"][:] = out
-    log.info("fdir.nc remapped.")
+        with nc4_mod.Dataset(fdir_nc, "r+") as ds:
+            ds.variables["fdir"][:] = out
+        log.info("fdir.nc remapped.")
+    elif out is not fdir:
+        # remap happened but no fill needed — still write back
+        with nc4_mod.Dataset(fdir_nc, "r+") as ds:
+            ds.variables["fdir"][:] = out
+        log.info("fdir.nc remapped.")
 
 
 def _fix_facc_boundary_nodata(morph_dir: Path) -> None:
@@ -453,12 +397,8 @@ def _fix_facc_boundary_nodata(morph_dir: Path) -> None:
     log.info("facc.nc updated.")
 
 
-def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, l0_nc: Path, resolution_hydrology: int) -> None:
-    """Regenerate latlon.nc when the L0 shape no longer matches dem.nc.
-
-    Uses the LCC CRS embedded in *l0_nc* to transform projected metre
-    coordinates to WGS84 lat/lon before writing.
-    """
+def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int) -> None:
+    """Regenerate latlon.nc when the L0 shape no longer matches dem.nc."""
     import netCDF4 as nc4_mod
 
     # Expected L0 shape
@@ -481,10 +421,6 @@ def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, l0_nc: Path, resolution_hy
         "Regenerating latlon.nc: L0=%dm (%d×%d), L1=%dm …",
         int(xres_l0), ncols_l0, nrows_l0, resolution_hydrology,
     )
-
-    # Read LCC CRS WKT from the land-cover NC (all grids share this projection)
-    with nc4_mod.Dataset(l0_nc) as ds:
-        crs_wkt = str(ds.variables["crs"].spatial_ref)
 
     xll = float(x_l0[0])  - xres_l0 / 2
     yll = float(y_l0[-1]) - xres_l0 / 2
@@ -514,7 +450,7 @@ def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, l0_nc: Path, resolution_hy
     latlon_dir.mkdir(parents=True, exist_ok=True)
     create_latlon(
         out_file   = out_file,
-        coord_sys  = crs_wkt,
+        coord_sys  = OUTPUT_CRS,
         header_l0  = l0_header,
         header_l1  = l1_header,
         header_l11 = l1_header,
@@ -560,8 +496,11 @@ def validate_inputs(domain: Path) -> None:
     _require(inp / "gauge" / "id_map.csv",         "mod15_gauges_to_mhm")
     _require(inp / "gauge" / "idgauges.nc",         "mod15_gauges_to_mhm")
 
-    # mod16 — latlon grid
-    _require(inp / "latlon" / "latlon.nc",          "mod16_latlon_to_mhm")
+    # mod16 — LAI gridded NetCDF
+    _require(inp / "lai" / "lai.nc",               "mod16_lai_to_mhm")
+
+    # mod17 — latlon grid
+    _require(inp / "latlon" / "latlon.nc",          "mod17_latlon_to_mhm")
 
     # mhm binary
     _require(Path(MHM_BINARY), "cmake build")
@@ -600,35 +539,32 @@ def main() -> None:
         sys.exit(1)
     log.info("Gauges: %s", [g["filename"] for g in gauges])
 
-    resolution = RESOLUTION_HYDROLOGY
-    log.info("L1 resolution: %d m (user-configured; L0 terrain is %d m)", resolution, L0_CELL_SIZE_M)
+    resolution = L1_CELL_SIZE_M
+    log.info("L1 resolution: %d m (from config.py; L0 terrain is %d m)", resolution, L0_CELL_SIZE_M)
 
     n_soil_horizons, soil_depths = read_soil_info(inp / "morph" / "soil_classdefinition.txt")
     log.info("Soil horizons: %d  depths: %s mm", n_soil_horizons, soil_depths)
 
-    # Phase 2b — bootstrap geology and LAI files if absent; resample ASCII inputs to L0
+    # Phase 2b — bootstrap geology if absent; resample ASCII inputs to L0
     _bootstrap_geology(inp / "morph")
-    _bootstrap_lai(inp / "morph", inp / "luse")
-    l0_nc = inp / "luse" / "lc_2024.nc"
-    _resample_ascii_to_l0(inp / "morph" / "soil_class.asc", l0_nc)
-    _build_idgauges_asc(inp / "morph", inp / "gauge", inp / "morph" / "dem.nc", l0_nc)
+    dem_nc = inp / "morph" / "dem.nc"
+    _resample_ascii_to_l0(inp / "morph" / "soil_class.asc", dem_nc)
+    _build_idgauges_asc(inp / "morph", inp / "gauge", dem_nc)
     _remap_fdir_to_arcgis(inp / "morph")
     _fix_facc_boundary_nodata(inp / "morph")
-    _ensure_latlon_nc(inp / "latlon", inp / "morph" / "dem.nc", l0_nc, RESOLUTION_HYDROLOGY)
-
-    # Phase 4 — create output directories and copy companion namelists
-    (domain / "output").mkdir(parents=True, exist_ok=True)
-    (domain / "restart").mkdir(parents=True, exist_ok=True)
-    (inp / "optional_data").mkdir(parents=True, exist_ok=True)
-
-    for src, name in (
-        (REPO_PARAM_NML,   "mhm_parameter.nml"),
-        (REPO_OUTPUT_NML,  "mhm_outputs.nml"),
-        (REPO_MRM_OUT_NML, "mrm_outputs.nml"),
-    ):
-        dst = domain / name
-        shutil.copy2(src, dst)
-        log.info("Copied → %s", dst)
+    # Condition the ArcGIS-encoded fdir for mHM's routing network initialisation.
+    # This must run AFTER _remap_fdir_to_arcgis so the direction encoding is correct.
+    _mod10_dir = str(Path(__file__).parent.parent / "mod10_dem_to_mhm")
+    if _mod10_dir not in sys.path:
+        sys.path.insert(0, _mod10_dir)
+    from mod10_dem_to_mhm.main import _condition_fdir_for_mhm
+    _condition_fdir_for_mhm(
+        str(inp / "morph" / "dem.nc"),
+        str(inp / "morph" / "fdir.nc"),
+        str(inp / "morph" / "facc.nc"),
+        L0_CELL_SIZE_M, L1_CELL_SIZE_M,
+    )
+    _ensure_latlon_nc(inp / "latlon", dem_nc, resolution)
 
     # Phase 3 — generate mhm.nml
     nml_path = domain / "mhm.nml"
@@ -650,16 +586,29 @@ def main() -> None:
     )
     log.info("Written: %s", nml_path)
 
-    # Phase 4b — repair morph NC axis order if files were written by old mod10
-    _fix_morph_nc_axis_order(inp / "morph")
+    # Phase 4 — create output directories and copy companion namelists
+    (domain / "output").mkdir(parents=True, exist_ok=True)
+    (domain / "restart").mkdir(parents=True, exist_ok=True)
+    (inp / "optional_data").mkdir(parents=True, exist_ok=True)
+
+    for src, name in (
+        (REPO_PARAM_NML,   "mhm_parameter.nml"),
+        (REPO_OUTPUT_NML,  "mhm_outputs.nml"),
+        (REPO_MRM_OUT_NML, "mrm_outputs.nml"),
+    ):
+        dst = domain / name
+        shutil.copy2(src, dst)
+        log.info("Copied → %s", dst)
 
     # Phase 5 — run mHM calibration
     log.info("Launching mHM calibration: %s  (cwd=%s)", MHM_BINARY, domain)
     log.info("opti_method=%d  opti_function=%d  n_iterations=%d", OPTI_METHOD, OPTI_FUNCTION, N_ITERATIONS)
+    log.info("OMP_NUM_THREADS=%d", N_OMP_THREADS)
 
     proc = subprocess.Popen(
         [MHM_BINARY],
         cwd=str(domain),
+        env={**os.environ, "OMP_NUM_THREADS": str(N_OMP_THREADS)},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
