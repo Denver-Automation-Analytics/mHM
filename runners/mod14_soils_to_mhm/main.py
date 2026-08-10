@@ -21,31 +21,32 @@ mHM configuration expected:
 from __future__ import annotations
 import logging
 from pathlib import Path
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from config import L0_CELL_SIZE_M, OUTPUT_CRS
 
 from soilgrids_access import download_soilgrids
 from regrid          import reproject_to_header
 from unit_convert    import convert
-from writers         import write_all_layers
+from writers         import write_all_layers, write_layers_nc
 from lut             import build_lut
 from utils           import (
     setup_logging,
     load_header,
-    build_soil_header_from_meteo,
-    read_lcc_crs_from_latlon,
 )
 
 # ---- USER INPUTS ---------------------------------------------------
-WATERSHED_PATH    = "/workspace/test_domain_3/input/domain/niver.geojson"
-METEO_HEADER_PATH = "/workspace/test_domain_3/input/latlon/header.txt"
+WATERSHED_PATH    = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
+L0_HEADER_PATH    = "/workspace/test_domain_3/input/gauge/header.txt"
+METEO_HEADER_PATH = "/workspace/test_domain_3/input/meteo/pre/header.txt"
 OUTPUT_DIR        = "/workspace/test_domain_3/input/morph"
-BUFFER_KM         = 6       # buffer around watershed for WCS request
 STATS             = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
 NODATA            = -9999
-SOIL_CELL_SIZE_M  = 250     # native SoilGrids resolution; 3000 / 250 = 12
+SOIL_CELL_SIZE_M  = L0_CELL_SIZE_M     # native SoilGrids resolution; 3000 / 250 = 12
+TARGET_CRS_WKT    = OUTPUT_CRS
+OUTPUT_FORMAT     = "asc"   # "asc" (18 .txt files) or "nc" (single soil_layers.nc)
 
-# Set to a CRS WKT string to skip the latlon.nc lookup (useful if meteo
-# hasn't been run yet or for a different projection)
-TARGET_CRS_WKT = None
 # --------------------------------------------------------------------
 
 
@@ -57,9 +58,9 @@ def main() -> None:
     cache_dir = out_root / "raw"
     out_root.mkdir(parents=True, exist_ok=True)
 
-    # 1. Build soil grid header anchored to the meteo grid at 250 m.
+    # 1. Read the canonical L0 header (gauge/luse domain) as the soil grid definition.
+    soil_header  = load_header(L0_HEADER_PATH)
     meteo_header = load_header(METEO_HEADER_PATH)
-    soil_header  = build_soil_header_from_meteo(meteo_header, SOIL_CELL_SIZE_M)
     factor = int(meteo_header["cellsize"]) // SOIL_CELL_SIZE_M
     log.info(
         "Soil grid: %d x %d cells at %d m  "
@@ -70,13 +71,11 @@ def main() -> None:
     )
 
     # 2. Resolve LCC CRS (read from latlon.nc produced by precip_to_mhm).
-    target_crs = TARGET_CRS_WKT or read_lcc_crs_from_latlon(
-        Path(METEO_HEADER_PATH).parent.parent / "latlon" / "latlon.nc"
-    )
+    target_crs = TARGET_CRS_WKT
 
     # 3. Download 18 SoilGrids GeoTIFFs (cached after first run).
     tif_paths = download_soilgrids(
-        WATERSHED_PATH, cache_dir, buffer_km=BUFFER_KM, stat=STATS,
+        WATERSHED_PATH, cache_dir, stat=STATS,
     )
 
     # 4. Reproject each GeoTIFF to the soil grid and apply unit conversion.
@@ -87,8 +86,11 @@ def main() -> None:
             layers[prop][layer_num] = convert(raw, prop, nodata=NODATA)
             log.info("Converted %s layer %02d", prop, layer_num)
 
-    # 5. Write 18 intermediate ASCII grids.
-    write_all_layers(out_root, soil_header, layers, nodata=NODATA)
+    # 5. Write 18 intermediate soil-layer grids.
+    if OUTPUT_FORMAT == "nc":
+        write_layers_nc(out_root, soil_header, layers, nodata=NODATA)
+    else:
+        write_all_layers(out_root, soil_header, layers, nodata=NODATA)
 
     # 6. Generate soil_classdefinition.txt + soil_class.asc (Python LUT builder).
     build_lut(layers, soil_header, out_root, nodata=NODATA)

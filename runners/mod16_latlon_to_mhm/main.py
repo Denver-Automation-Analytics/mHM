@@ -5,7 +5,7 @@ Combines headers from all grid-defining modules into the single latlon.nc
 file that mHM requires.  Run this after mod10, mod11, and mod14.
 
 Grid levels:
-    L0   = 10 m    morph/dem.asc         (mod10 DEM)
+    L0   = 10 m    morph/dem.nc          (mod10 DEM)
     L1   = 250 m   morph/soil_class.asc  (mod14 soils)
     L11  = 250 m   same as L1            (routing == hydrological)
 
@@ -22,7 +22,7 @@ from latlon_grid import create_latlon  # noqa: E402
 
 # ---- USER INPUTS --------------------------------------------------
 TARGET_CRS  = "EPSG:5070"
-L0_HEADER   = "/workspace/test_domain_3/input/morph/dem.asc"
+L0_HEADER   = "/workspace/test_domain_3/input/morph/dem.nc"
 L1_HEADER   = "/workspace/test_domain_3/input/morph/soil_class.asc"
 L11_HEADER  = L1_HEADER
 OUTPUT_DIR  = "/workspace/test_domain_3/input/latlon"

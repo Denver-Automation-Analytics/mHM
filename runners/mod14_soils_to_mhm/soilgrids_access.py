@@ -35,7 +35,7 @@ _PROPERTIES: dict[str, tuple[str, str]] = {
 
 
 def _watershed_bbox_homolosine(
-    watershed_path: str, buffer_km: float
+    watershed_path: str
 ) -> tuple[float, float, float, float]:
     """Return (minx, miny, maxx, maxy) in Homolosine (EPSG:152160)."""
     gdf = gpd.read_file(watershed_path)
@@ -43,7 +43,6 @@ def _watershed_bbox_homolosine(
         raise ValueError(f"Watershed file has no CRS: {watershed_path}")
     gdf_hom = gdf.to_crs(_SG_PROJ4)
     gdf_hom = gdf_hom.copy()
-    gdf_hom["geometry"] = gdf_hom.geometry.buffer(buffer_km * 1_000.0)
     minx, miny, maxx, maxy = gdf_hom.total_bounds
     log.info(
         "Watershed bbox in Homolosine (m): %.0f %.0f %.0f %.0f",
@@ -117,7 +116,6 @@ def _download_coverage(
 def download_soilgrids(
     watershed_path: str,
     cache_dir: Path,
-    buffer_km: float = 6.0,
     stat: str = "Q0.5",
 ) -> dict[str, dict[int, Path]]:
     """
@@ -126,7 +124,7 @@ def download_soilgrids(
     Returns paths[short_name][layer_number] -> Path, where short_name is one
     of "bd", "cl", "sn" matching the Fortran input file prefix convention.
     """
-    bbox = _watershed_bbox_homolosine(watershed_path, buffer_km)
+    bbox = _watershed_bbox_homolosine(watershed_path)
     paths: dict[str, dict[int, Path]] = {}
 
     for prop, (url, short) in _PROPERTIES.items():

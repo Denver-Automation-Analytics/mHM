@@ -26,8 +26,8 @@ def write_asc(path: Path, header: dict, grid: np.ndarray, nodata: int) -> None:
     header_lines = [
         f"ncols        {header['ncols']}",
         f"nrows        {header['nrows']}",
-        f"xllcorner    {header['xllcorner']}",
-        f"yllcorner    {header['yllcorner']}",
+        f"xllcorner    {float(header['xllcorner'])}",
+        f"yllcorner    {float(header['yllcorner'])}",
         f"cellsize     {int(header['cellsize'])}",
         f"NODATA_value {nodata}",
     ]

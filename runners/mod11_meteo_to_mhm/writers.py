@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
+import rioxarray  # noqa: F401  # registers .rio accessor
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +39,13 @@ def _sanitize_dataset_attrs(ds: xr.Dataset) -> xr.Dataset:
 def write_meteo(ds: xr.Dataset,
                 out_path: Path,
                 ref_time: pd.Timestamp,
-                nodata: float) -> None:
+                nodata: float,
+                crs: str | None = None) -> None:
     """Write a single-variable meteo NetCDF (pre.nc or tavg.nc)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if crs is not None:
+        ds = ds.rio.write_crs(crs)
 
     var = list(ds.data_vars)[0]
     encoding = {

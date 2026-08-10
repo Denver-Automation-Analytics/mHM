@@ -28,14 +28,34 @@ HeaderLike = Union[dict, str, Path]
 # --------------------------------------------------------------------------- #
 # Header handling
 # --------------------------------------------------------------------------- #
+def _header_from_nc(path: Path) -> dict:
+    """Derive an mHM-style header dict from the 1-D x/y coords of a NetCDF file."""
+    with nc.Dataset(path) as ds:
+        x = ds["x"][:]
+        y = ds["y"][:]
+        fill = getattr(ds.variables.get(list(ds.variables)[-1], object()), "_FillValue", -9999.0)
+    cs = float(x[1] - x[0])          # positive west→east step
+    cs_y = float(y[0] - y[1])        # positive north→south step (y is north-down)
+    return {
+        "ncols":        int(x.shape[0]),
+        "nrows":        int(y.shape[0]),
+        "xllcorner":    float(x[0])   - cs   / 2,
+        "yllcorner":    float(y[-1])  - cs_y / 2,
+        "cellsize":     cs,
+        "NODATA_value": float(fill),
+    }
+
+
 def _load_header(header: HeaderLike) -> dict:
-    """Accept an in-memory header dict or a path to an mHM header.txt file."""
+    """Accept an in-memory header dict or a path to an mHM header.txt/.nc file."""
     if isinstance(header, dict):
         parsed = header
     else:
         path = Path(header)
         if not path.is_file():
             raise FileNotFoundError(f"Header file not found: {path}")
+        if path.suffix == ".nc":
+            return _header_from_nc(path)
         parsed = {}
         for line in path.read_text().splitlines():
             line = line.strip()
@@ -116,6 +136,9 @@ def header_to_latlon(header: HeaderLike,
 # --------------------------------------------------------------------------- #
 # NetCDF writing
 # --------------------------------------------------------------------------- #
+_CHUNK_ROWS = 512   # rows per batch; keeps peak memory ~400 MB at 3-km resolution
+
+
 def _write_level(fh: nc.Dataset,
                  lons: np.ndarray,
                  lats: np.ndarray,
@@ -157,6 +180,72 @@ def _write_level(fh: nc.Dataset,
     lat_var[:] = lats
 
 
+def _write_level_chunked(
+    fh: nc.Dataset,
+    header: HeaderLike,
+    coord_sys: str,
+    suffix: Tuple[str, str],
+) -> None:
+    """Like _write_level but streams row-batches so peak memory stays bounded."""
+    sfx, long_sfx = suffix
+    h = _load_header(header)
+    nrows, ncols = h["nrows"], h["ncols"]
+    xll, yll, cs = h["xllcorner"], h["yllcorner"], h["cellsize"]
+    missing = float(h["NODATA_value"])
+
+    x_centers = np.linspace(xll + cs / 2, xll + cs / 2 + (ncols - 1) * cs, ncols)
+    y_centers = np.linspace(yll + cs / 2 + (nrows - 1) * cs, yll + cs / 2,  nrows)
+
+    x_dim, y_dim = f"xc{sfx}", f"yc{sfx}"
+    if x_dim not in fh.dimensions:
+        fh.createDimension(x_dim, ncols)
+    if y_dim not in fh.dimensions:
+        fh.createDimension(y_dim, nrows)
+
+    xc = fh.createVariable(x_dim, "f8", (x_dim,))
+    xc.axis = "X"
+    xc[:] = x_centers
+
+    yc = fh.createVariable(y_dim, "f8", (y_dim,))
+    yc.axis = "Y"
+    yc[:] = y_centers
+
+    lon_var = fh.createVariable(
+        f"lon{sfx}", "f8", (y_dim, x_dim),
+        zlib=True, complevel=4, chunksizes=(_CHUNK_ROWS, ncols),
+    )
+    lon_var.units         = "degrees_east"
+    lon_var.long_name     = f"longitude{long_sfx}"
+    lon_var.missing_value = missing
+
+    lat_var = fh.createVariable(
+        f"lat{sfx}", "f8", (y_dim, x_dim),
+        zlib=True, complevel=4, chunksizes=(_CHUNK_ROWS, ncols),
+    )
+    lat_var.units         = "degrees_north"
+    lat_var.long_name     = f"latitude{long_sfx}"
+    lat_var.missing_value = missing
+
+    transformer = (
+        Transformer.from_crs(coord_sys, "EPSG:4326", always_xy=True)
+        if coord_sys else None
+    )
+
+    for row0 in range(0, nrows, _CHUNK_ROWS):
+        row1 = min(row0 + _CHUNK_ROWS, nrows)
+        # broadcast x across the batch without copying; copy y to allow transform
+        xx_batch = np.broadcast_to(x_centers, (row1 - row0, ncols))
+        yy_batch = np.repeat(y_centers[row0:row1, None], ncols, axis=1)
+        if transformer is not None:
+            lons, lats = transformer.transform(xx_batch, yy_batch)
+        else:
+            lons = np.array(xx_batch)   # materialise the broadcast view
+            lats = yy_batch
+        lon_var[row0:row1, :] = lons
+        lat_var[row0:row1, :] = lats
+        log.debug("lat/lon%s: rows %d–%d / %d", sfx, row0, row1, nrows)
+
+
 # --------------------------------------------------------------------------- #
 # Public entry point
 # --------------------------------------------------------------------------- #
@@ -195,8 +284,7 @@ def create_latlon(
         fh.history     = "Created " + time.ctime(time.time())
 
         if header_l0 is not None:
-            lons, lats, xx, yy, miss = header_to_latlon(header_l0, coord_sys)
-            _write_level(fh, lons, lats, xx, yy, miss, ("_l0", " at level 0"))
+            _write_level_chunked(fh, header_l0, coord_sys, ("_l0", " at level 0"))
 
         # L1 is always required
         lons, lats, xx, yy, miss = header_to_latlon(header_l1, coord_sys)

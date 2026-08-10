@@ -11,13 +11,12 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
-def load_and_prepare_watershed(path: str, target_crs, buffer_km: float) -> gpd.GeoDataFrame:
+def load_and_prepare_watershed(path: str, target_crs) -> gpd.GeoDataFrame:
     """Read the boundary, reproject to HRRR LCC, and buffer."""
     gdf = gpd.read_file(path)
     if gdf.crs is None:
         raise ValueError(f"Watershed file {path} has no CRS defined.")
     gdf = gdf.to_crs(target_crs)
-    gdf["geometry"] = gdf.geometry.buffer(buffer_km * 1_000.0)
     return gdf
 
 

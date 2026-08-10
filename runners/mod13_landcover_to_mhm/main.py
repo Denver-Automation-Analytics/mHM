@@ -9,26 +9,27 @@ writes ArcGIS ASCII grids that mHM reads directly.
 
 mHM configuration expected:
     iFlag_cordinate_sys = 0                (projected LCC meters)
-    L2 cellsize        = 3000 m            (meteo grid)
-    L0 cellsize        = 300 m             (this module; ÷10 of L2)
+    L0 cellsize        = L0_CELL_SIZE_M    (runners/config.py)
     Land cover classes : 1=Forest, 2=Impervious, 3=Pervious
 """
 
 from __future__ import annotations
 import logging
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from config import L0_CELL_SIZE_M, OUTPUT_CRS
 from pathlib import Path
 from dotenv import load_dotenv
+from pyproj import CRS as ProjCRS
 
 from ghl_access   import open_ghl, select_scene, detect_class_var
 from reclassify   import to_mhm_classes, log_class_stats
 from regrid       import clip_and_reproject_to_grid
 from writers      import write_asc, write_nc_copy
 from utils        import (
-    load_header,
-    build_l0_header_from_meteo,
+    build_l0_header_from_watershed,
     write_header_txt,
-    assert_grid_alignment,
 )
 
 load_dotenv()
@@ -41,9 +42,8 @@ if not os.environ.get("GHL_REPO"):
     )
 
 # ---- USER INPUTS ---------------------------------------------------
-WATERSHED_PATH        = "/workspace/test_domain_3/input/domain/niver.geojson"
+WATERSHED_PATH        = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
 OUTPUT_DIR            = "/workspace/test_domain_3/input/luse"
-BUFFER_KM             = 6
 
 # --- GHL subscription ------------------------------------------------
 # Repo name is read from the GHL_REPO env var so it isn't hard-coded in source.
@@ -53,9 +53,7 @@ GHL_VARIABLE          = os.environ.get("GHL_VARIABLE")   # None -> auto-detect
 SCENE_YEARS           = [2024]                            # one .asc per year
 
 # --- Grid targeting --------------------------------------------------
-METEO_HEADER_PATH     = "/workspace/test_domain_3/input/meteo/pre/header.txt"   # anchor grid
-TARGET_CRS_WKT        = None          # None -> read CRS WKT from meteo/pre/pre.nc (spatial_ref var)
-L0_REFINEMENT_FACTOR  = 10            # L0 cellsize = L2 cellsize / this (must be int divisor)
+# L0_CELL_SIZE_M and OUTPUT_CRS are read from runners/config.py at runtime.
 
 # --- Reclassification knobs ----------------------------------------
 PLANTATION_MHM_CLASS  = 1             # 1=Forest (default) or 3=Pervious
@@ -83,23 +81,6 @@ LOG_LEVEL             = logging.INFO
 
 # --------------------------------------------------------------------
 
-def _read_crs_from_meteo_nc(meteo_nc_path: Path) -> str:
-    """Read the CRS WKT stored by rioxarray in the spatial_ref variable."""
-    import netCDF4 as nc
-    with nc.Dataset(meteo_nc_path) as fh:
-        if "spatial_ref" not in fh.variables:
-            raise ValueError(
-                f"No spatial_ref variable in {meteo_nc_path}. "
-                "Set TARGET_CRS_WKT explicitly in main.py."
-            )
-        wkt = getattr(fh.variables["spatial_ref"], "crs_wkt", None)
-    if not wkt:
-        raise ValueError(
-            f"spatial_ref in {meteo_nc_path} has no crs_wkt attribute. "
-            "Set TARGET_CRS_WKT explicitly in main.py."
-        )
-    return wkt
-
 def main() -> None:
     logging.basicConfig(
         level=LOG_LEVEL,
@@ -111,22 +92,16 @@ def main() -> None:
     out_root = Path(OUTPUT_DIR)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    # 1. Anchor the target grid to the meteo header (L2) and derive L0.
-    meteo_header = load_header(METEO_HEADER_PATH)
-    l0_header    = build_l0_header_from_meteo(meteo_header, L0_REFINEMENT_FACTOR)
-    log.info("L2 (meteo) cellsize=%s m, ncols=%d, nrows=%d",
-             meteo_header["cellsize"], meteo_header["ncols"], meteo_header["nrows"])
+    # 1. Build the L0 grid directly from the watershed boundary.
+    l0_header = build_l0_header_from_watershed(WATERSHED_PATH, L0_CELL_SIZE_M, OUTPUT_CRS)
     log.info("L0 cellsize=%s m, ncols=%d, nrows=%d",
              l0_header["cellsize"], l0_header["ncols"], l0_header["nrows"])
-    assert_grid_alignment(meteo_header, l0_header)
 
-    # Persist the L0 header so the future DEM module can reuse it.
+    # Persist the L0 header so downstream modules can reuse it.
     write_header_txt(l0_header, out_root / "header.txt")
 
-    # 2. Resolve target CRS (WKT) — the meteo grid's native LCC projection.
-    target_crs = TARGET_CRS_WKT or _read_crs_from_meteo_nc(
-        Path(METEO_HEADER_PATH).parent / "pre.nc"
-    )
+    # 2. Resolve target CRS (WKT) from shared config.
+    target_crs = ProjCRS.from_user_input(OUTPUT_CRS).to_wkt()
 
     # 3. Open GHL Zarr store via Arraylake.
     ds = open_ghl(GHL_REPO, GHL_BRANCH_OR_TAG)
@@ -142,10 +117,10 @@ def main() -> None:
         lc_l0 = clip_and_reproject_to_grid(
             scene,
             watershed_path=WATERSHED_PATH,
-            buffer_km=BUFFER_KM,
             target_crs_wkt=target_crs,
             header=l0_header,
             src_nodata=NODATA_SRC,
+            l0_cellsize_m=L0_CELL_SIZE_M,
         )
 
         # Reclassify GHL -> mHM 3-class scheme.

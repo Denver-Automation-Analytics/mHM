@@ -17,25 +17,28 @@ import sys
 from datetime import timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import OUTPUT_CRS  # noqa: E402
+
 import numpy as np
 import pandas as pd
 import xarray as xr
 from joblib import Parallel, delayed
 
 from pet import METHODS_REQUIRING_TAVG, METHODS_REQUIRING_TMAX_TMIN, _sat_vapor_pressure_kpa, pet_calculator, validate_tmin_tmax
-from lat_reader import read_latitude
+from lat_reader import compute_latitude_from_header
 from utils import detect_time_freq, load_header, setup_logging
-from writers import write_header_txt, write_pet
+from writers import create_pet_nc, write_header_txt, write_pet_chunk
 
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
 # ---------------------------------------------------------------------------
 TAVG_FILE   = "/workspace/test_domain_3/input/meteo/tavg/tavg.nc"
-LATLON_FILE = "/workspace/test_domain_3/input/latlon/latlon.nc"
 HEADER_FILE = "/workspace/test_domain_3/input/latlon/header.txt"   # shared with mod11
 PET_OUT_DIR = "/workspace/test_domain_3/input/meteo/pet"
 METHOD      = "penman_monteith"     # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
-MAX_WORKERS = 1           # set >1 for multicore parallelism
+MAX_WORKERS = 10           # set >1 for multicore parallelism
+CHUNK_SIZE  = 24           # timesteps per batch; lower = less peak RAM
 NODATA      = -9999.0
 
 # Optional: set both to enable methods that require tmin/tmax
@@ -44,13 +47,11 @@ TMAX_FILE: str | None = None
 TMIN_FILE: str | None = None
 
 # Optional: set all four to enable penman_monteith
-SSRD_FILE:      str | None = "/workspace/test_domain_3/input/meteo/ssrd/ssrd.nc"
-STRD_FILE:      str | None = "/workspace/test_domain_3/input/meteo/strd/strd.nc"
-WINDSPEED_FILE: str | None = "/workspace/test_domain_3/input/meteo/windspeed/windspeed.nc"
-RHAVG_FILE:     str | None = "/workspace/test_domain_3/input/meteo/rhavg/rhavg.nc"
-DEM_FILE:       str | None = "/workspace/test_domain_3/input/dem/dem_m.tif"
-DEM_FEET_TO_METERS: float = 1.0   # elevation already in meters (converted by mod10)
-ELEVATION_M:    float = 0.0   # fallback mean elevation (m a.s.l.) when DEM_FILE is None
+SSRD_FILE = "/workspace/test_domain_3/input/meteo/ssrd/ssrd.nc"
+STRD_FILE = "/workspace/test_domain_3/input/meteo/strd/strd.nc"
+WINDSPEED_FILE = "/workspace/test_domain_3/input/meteo/windspeed/windspeed.nc"
+RHAVG_FILE = "/workspace/test_domain_3/input/meteo/rhavg/rhavg.nc"
+DEM_FILE = "/workspace/test_domain_3/input/dem/dem_corrected.tif"
 # ---------------------------------------------------------------------------
 
 log = logging.getLogger("pet_to_mhm")
@@ -72,9 +73,16 @@ def _detect_tavg_var(ds: xr.Dataset) -> str:
 
 
 def _mean_elevation(dem_path: str) -> float:
-    import rioxarray as rxr  # noqa: PLC0415
-    da = rxr.open_rasterio(dem_path, masked=True).squeeze()
-    return float(da.mean().item())
+    # block-windowed read to avoid loading the full DEM into RAM
+    import rasterio  # noqa: PLC0415
+    with rasterio.open(dem_path) as src:
+        total, count = 0.0, 0
+        for _, window in src.block_windows(1):
+            valid = src.read(1, window=window, masked=True).compressed().astype(np.float64)
+            valid = valid[np.isfinite(valid)]
+            total += valid.sum()
+            count += valid.size
+    return total / count if count > 0 else 0.0
 
 
 def _compute_pm_inputs(tavg_t, rhavg_t, ssrd_t, strd_t, windspeed_t, dt_s, elevation_m):
@@ -135,9 +143,8 @@ def main() -> None:
     # PM inputs (ssrd, strd, windspeed, rhavg)
     ssrd = strd = windspeed = rhavg = None
     dt_s = 3600.0
-    elevation_m = ELEVATION_M
     if DEM_FILE is not None:
-        elevation_m = _mean_elevation(DEM_FILE) * DEM_FEET_TO_METERS
+        elevation_m = _mean_elevation(DEM_FILE)
         log.info("Mean elevation from DEM: %.1f m", elevation_m)
     if METHOD in {"penman_monteith", "penman-monteith"}:
         log.info("Loading PM inputs from %s / %s / %s / %s",
@@ -154,52 +161,78 @@ def main() -> None:
         dt_s = float((ssrd_times[1] - ssrd_times[0]).total_seconds()) if len(ssrd_times) >= 2 else 3600.0
         log.info("Radiation timestep dt_s = %.0f s", dt_s)
 
-    # 4. Latitude — read from latlon.nc; reshape to (1, nrows, ncols) for broadcasting
-    log.info("Reading latitude from %s", LATLON_FILE)
-    lat_deg = read_latitude(Path(LATLON_FILE))   # (nrows, ncols)
+    # 4. Latitude — derived from header.txt + projected CRS; reshape to (1, nrows, ncols) for broadcasting
+    log.info("Deriving latitude from %s (CRS: %s)", HEADER_FILE, OUTPUT_CRS)
+    lat_deg = compute_latitude_from_header(Path(HEADER_FILE), OUTPUT_CRS)   # (nrows, ncols)
     lat3d = np.radians(lat_deg)[np.newaxis, :, :]
 
-    # 5. Build per-timestep task list
-    log.info("Building %d PET tasks", len(ds.time))
-    tasks = []
-    for idx in range(len(ds.time)):
-        t = pd.Timestamp(ds.time.values[idx])
-        current_time = t.to_pydatetime().replace(tzinfo=timezone.utc)
-        task = {
-            "lat":       lat3d,
-            "time":      current_time,
-            "stat_freq": stat_freq,
-            "method":    METHOD,
-            "tavg":      tavg.isel(time=idx).values[np.newaxis, :, :],
-            "tmin":      tmin.isel(time=idx).values[np.newaxis, :, :] if tmin is not None else None,
-            "tmax":      tmax.isel(time=idx).values[np.newaxis, :, :] if tmax is not None else None,
-        }
-        if ssrd is not None:
-            task.update(_compute_pm_inputs(
-                task["tavg"],
-                rhavg.isel(time=idx).values[np.newaxis, :, :],
-                ssrd.isel(time=idx).values[np.newaxis, :, :],
-                strd.isel(time=idx).values[np.newaxis, :, :],
-                windspeed.isel(time=idx).values[np.newaxis, :, :],
-                dt_s,
-                elevation_m,
-            ))
-        tasks.append(task)
+    # 5. Pre-compute time offsets (int32 hours-since-ref — negligible memory)
+    n_times = len(ds.time)
+    all_times = pd.DatetimeIndex(ds.time.values)
+    time_offsets = ((all_times - pd.Timestamp(ref_time)) / pd.Timedelta("1h")).to_numpy(dtype="int32")
 
-    # 6. Compute PET in parallel
-    log.info("Computing PET on %d worker(s)", MAX_WORKERS)
-    results = Parallel(n_jobs=MAX_WORKERS, backend="loky")(
-        delayed(pet_calculator)(**task) for task in tasks
-    )
-
-    # 7. Stack and cast
-    pet_data = np.vstack(results).astype(np.float32)
-    log.info("PET array shape: %s  range: [%.3f, %.3f]",
-             pet_data.shape, float(np.nanmin(pet_data)), float(np.nanmax(pet_data)))
-
-    # 8. Write outputs
+    # 6. Create output NetCDF structure once (unlimited time; filled chunk-by-chunk)
     out_dir = Path(PET_OUT_DIR)
-    write_pet(pet_data, ds, tavg_var, out_dir / "pet.nc", ref_time, NODATA, stat_freq)
+    out_path = out_dir / "pet.nc"
+    create_pet_nc(out_path, ds, tavg_var, ref_time, NODATA, stat_freq, nc_chunk_t=CHUNK_SIZE)
+
+    # 7. Process and write CHUNK_SIZE timesteps at a time
+    log.info("Computing PET: %d steps, chunk=%d, workers=%d, backend=threading",
+             n_times, CHUNK_SIZE, MAX_WORKERS)
+    pet_min, pet_max = np.inf, -np.inf
+    for chunk_start in range(0, n_times, CHUNK_SIZE):
+        chunk_slice = slice(chunk_start, min(chunk_start + CHUNK_SIZE, n_times))
+
+        tavg_chunk = tavg.isel(time=chunk_slice).values          # (cs, ny, nx)
+        tmin_chunk = tmin.isel(time=chunk_slice).values if tmin is not None else None
+        tmax_chunk = tmax.isel(time=chunk_slice).values if tmax is not None else None
+        if ssrd is not None:
+            ssrd_chunk      = ssrd.isel(time=chunk_slice).values
+            strd_chunk      = strd.isel(time=chunk_slice).values
+            windspeed_chunk = windspeed.isel(time=chunk_slice).values
+            rhavg_chunk     = rhavg.isel(time=chunk_slice).values
+
+        tasks = []
+        for i, abs_idx in enumerate(range(chunk_start, chunk_start + tavg_chunk.shape[0])):
+            t = pd.Timestamp(ds.time.values[abs_idx])
+            task = {
+                "lat":       lat3d,
+                "time":      t.to_pydatetime().replace(tzinfo=timezone.utc),
+                "stat_freq": stat_freq,
+                "method":    METHOD,
+                "tavg":      tavg_chunk[i : i + 1],
+                "tmin":      tmin_chunk[i : i + 1] if tmin_chunk is not None else None,
+                "tmax":      tmax_chunk[i : i + 1] if tmax_chunk is not None else None,
+            }
+            if ssrd is not None:
+                task.update(_compute_pm_inputs(
+                    task["tavg"],
+                    rhavg_chunk[i : i + 1],
+                    ssrd_chunk[i : i + 1],
+                    strd_chunk[i : i + 1],
+                    windspeed_chunk[i : i + 1],
+                    dt_s,
+                    elevation_m,
+                ))
+            tasks.append(task)
+
+        results = Parallel(n_jobs=MAX_WORKERS, backend="threading")(
+            delayed(pet_calculator)(**task) for task in tasks
+        )
+
+        chunk_pet = np.vstack(results).astype(np.float32)
+        write_pet_chunk(out_path, chunk_pet, time_offsets[chunk_slice], chunk_start)
+
+        cmin, cmax = float(np.nanmin(chunk_pet)), float(np.nanmax(chunk_pet))
+        pet_min = min(pet_min, cmin)
+        pet_max = max(pet_max, cmax)
+        del tavg_chunk, tmin_chunk, tmax_chunk, tasks, results, chunk_pet
+        if ssrd is not None:
+            del ssrd_chunk, strd_chunk, windspeed_chunk, rhavg_chunk
+
+    log.info("PET written: %d steps, range [%.3f, %.3f]", n_times, pet_min, pet_max)
+
+    # 8. Write header
     write_header_txt(load_header(Path(HEADER_FILE)), out_dir / "header.txt")
 
     ds.close()

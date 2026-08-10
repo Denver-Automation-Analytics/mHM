@@ -26,38 +26,28 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from config import OUTPUT_CRS
+
 import geopandas as gpd
 
 from hyriver      import get_usgs_stations, get_nwis, aggregate_to_hourly, interpolate_gaps
 from mhm_format   import to_m3s, filter_by_qualifiers, write_gauge_file
 from idgauges     import build_idgauges_grid, write_id_map
-from writers      import write_asc
-from utils        import load_header, write_header_txt, read_projection_wkt
+from writers      import write_nc
+from utils        import load_header_from_nc, write_header_txt, read_projection_wkt
 
 # Load env from repo root explicitly so runs from any CWD behave the same.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
 
-# Normalize whitespace/quotes to avoid passing a malformed token to requests.
-# token = os.environ.get("API_USGS_PAT", "").strip().strip('"').strip("'")
-# if token:
-#     os.environ["API_USGS_PAT"] = token
-#     print("[hydro] Using USGS API key from API_USGS_PAT env var.")
-
-# # Fail fast if the USGS API key is not set; dataretrieval reads it implicitly.
-# if not token:
-#     raise EnvironmentError(
-#         "API_USGS_PAT env var is required. Register at USGS Water Data for "
-#         "an API key and add it to your .env file."
-#     )
-
 # ---- USER INPUTS ---------------------------------------------------
-WATERSHED_PATH        = "/workspace/test_domain_3/input/domain/niver.geojson"
+WATERSHED_PATH        = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
 OUTPUT_DIR            = "/workspace/test_domain_3/input/gauge"
 
-# --- L0 grid (shared with land-cover module) -----------------------
-L0_HEADER_PATH        = "/workspace/test_domain_3/input/luse/header.txt"
-TARGET_CRS_WKT        = None       # None -> read from meteo latlon.nc projection attr
+# --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
+L0_MORPH_NC_PATH      = "/workspace/test_domain_3/input/morph/dem.nc"
+TARGET_CRS_WKT        = OUTPUT_CRS
 LATLON_NC_PATH        = "/workspace/test_domain_3/input/latlon/latlon.nc"
 
 # --- Time & cadence ------------------------------------------------
@@ -94,8 +84,8 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     # 1. L0 header + target CRS.
-    l0_header  = load_header(L0_HEADER_PATH)
-    target_crs = TARGET_CRS_WKT or read_projection_wkt(LATLON_NC_PATH)
+    l0_header  = load_header_from_nc(L0_MORPH_NC_PATH)
+    target_crs = TARGET_CRS_WKT
     log.info("L0 grid: %d x %d cells @ %s m", l0_header["ncols"],
              l0_header["nrows"], l0_header["cellsize"])
 
@@ -147,11 +137,11 @@ def main() -> None:
             log.warning("Skipping %s (%s): no valid values after QC.", site_no, name)
             continue
 
-        span_yrs = (valid.index.max() - valid.index.min()).days / 365.25
-        if span_yrs < MIN_RECORD_YEARS:
-            log.warning("Skipping %s (%s): record span %.2f yr < %d yr threshold.",
-                        site_no, name, span_yrs, MIN_RECORD_YEARS)
-            continue
+        # span_yrs = (valid.index.max() - valid.index.min()).days / 365.25
+        # if span_yrs < MIN_RECORD_YEARS:
+        #     log.warning("Skipping %s (%s): record span %.2f yr < %d yr threshold.",
+        #                 site_no, name, span_yrs, MIN_RECORD_YEARS)
+        #     continue
 
         survivors.append({
             "site_no": site_no,
@@ -186,7 +176,7 @@ def main() -> None:
         target_crs_wkt = target_crs,
         nodata         = NODATA,
     )
-    write_asc(out_root / "idgauges.asc", l0_header, grid, nodata=NODATA)
+    write_nc(out_root / "idgauges.nc", l0_header, grid, nodata=NODATA)
     write_header_txt(l0_header, out_root / "header.txt")
     write_id_map(out_root / "id_map.csv", survivors,
                  start=START_DATE, end=END_DATE, cadence=CADENCE)

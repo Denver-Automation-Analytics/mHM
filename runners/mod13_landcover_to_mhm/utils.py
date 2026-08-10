@@ -1,8 +1,11 @@
-"""Header IO, L0 grid construction, and cross-grid alignment checks."""
+"""Header IO and L0 grid construction."""
 
 from __future__ import annotations
 import logging
+import math
 from pathlib import Path
+
+import geopandas as gpd
 
 log = logging.getLogger(__name__)
 
@@ -38,8 +41,8 @@ def write_header_txt(header: dict, out_path: Path) -> None:
     lines = [
         f"ncols        {header['ncols']}",
         f"nrows        {header['nrows']}",
-        f"xllcorner    {header['xllcorner']}",
-        f"yllcorner    {header['yllcorner']}",
+        f"xllcorner    {float(header['xllcorner'])}",
+        f"yllcorner    {float(header['yllcorner'])}",
         f"cellsize     {int(header['cellsize'])}",
         f"NODATA_value {int(header['NODATA_value'])}",
         "",
@@ -49,60 +52,22 @@ def write_header_txt(header: dict, out_path: Path) -> None:
 
 
 # --- L0 header derivation ------------------------------------------
-def build_l0_header_from_meteo(meteo_header: dict, refinement: int) -> dict:
-    """
-    Build an L0 header that:
-      * Uses cellsize_L0 = cellsize_L2 / refinement (must divide evenly).
-      * Shares the exact extent as the L2 (meteo) grid so
-        xll + ncols*cs and yll + nrows*cs match byte-for-byte.
-    """
-    if refinement < 1 or int(meteo_header["cellsize"]) % refinement != 0:
-        raise ValueError(
-            f"L0_REFINEMENT_FACTOR={refinement} must be a positive integer "
-            f"divisor of L2 cellsize ({int(meteo_header['cellsize'])})."
-        )
-
-    cs_l0 = int(meteo_header["cellsize"]) // refinement
-    ncols = meteo_header["ncols"] * refinement
-    nrows = meteo_header["nrows"] * refinement
-
+def build_l0_header_from_watershed(watershed_path: str, l0_cellsize_m: int, crs: str) -> dict:
+    """Derive L0 grid by projecting the watershed bbox to crs and snapping to l0_cellsize_m."""
+    ws = gpd.read_file(watershed_path).to_crs(crs)
+    raw_xmin, raw_ymin, raw_xmax, raw_ymax = ws.total_bounds
+    # math.floor/ceil return int; multiply by int cellsize stays int — cast to float for header formatting
+    xll = float(math.floor(raw_xmin / l0_cellsize_m) * l0_cellsize_m)
+    yll = float(math.floor(raw_ymin / l0_cellsize_m) * l0_cellsize_m)
+    xur = float(math.ceil(raw_xmax  / l0_cellsize_m) * l0_cellsize_m)
+    yur = float(math.ceil(raw_ymax  / l0_cellsize_m) * l0_cellsize_m)
+    ncols = round((xur - xll) / l0_cellsize_m)
+    nrows = round((yur - yll) / l0_cellsize_m)
     return {
         "ncols":        ncols,
         "nrows":        nrows,
-        "xllcorner":    meteo_header["xllcorner"],
-        "yllcorner":    meteo_header["yllcorner"],
-        "cellsize":     cs_l0,
+        "xllcorner":    xll,
+        "yllcorner":    yll,
+        "cellsize":     l0_cellsize_m,
         "NODATA_value": -9999,
     }
-
-
-# --- alignment checks ----------------------------------------------
-def assert_grid_alignment(meteo_header: dict, l0_header: dict) -> None:
-    """Verify L0 and L2 share the same extent and satisfy the multiple rule."""
-    # multiple-of check
-    if int(meteo_header["cellsize"]) % int(l0_header["cellsize"]) != 0:
-        raise AssertionError(
-            f"L2 cellsize ({meteo_header['cellsize']}) is not an integer "
-            f"multiple of L0 cellsize ({l0_header['cellsize']})."
-        )
-
-    # extent check: xur, yur must match to sub-meter tolerance
-    def _extent(h):
-        xur = h["xllcorner"] + h["ncols"] * h["cellsize"]
-        yur = h["yllcorner"] + h["nrows"] * h["cellsize"]
-        return h["xllcorner"], h["yllcorner"], xur, yur
-
-    xll_m, yll_m, xur_m, yur_m = _extent(meteo_header)
-    xll_0, yll_0, xur_0, yur_0 = _extent(l0_header)
-
-    for a, b, name in [
-        (xll_m, xll_0, "xllcorner"),
-        (yll_m, yll_0, "yllcorner"),
-        (xur_m, xur_0, "xurcorner"),
-        (yur_m, yur_0, "yurcorner"),
-    ]:
-        if abs(a - b) > 1e-6:
-            raise AssertionError(
-                f"L0 and L2 grids disagree on {name}: meteo={a}, L0={b}."
-            )
-    log.info("Grid alignment check OK: L0 exactly covers L2 extent.")

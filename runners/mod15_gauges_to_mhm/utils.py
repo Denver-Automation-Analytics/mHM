@@ -47,6 +47,35 @@ def write_header_txt(header: dict, out_path: Path) -> None:
     log.info("Wrote %s", out_path)
 
 
+def load_header_from_nc(path: str | Path) -> dict:
+    """Derive an mHM-style header dict from a morph NetCDF file written by write_nc."""
+    import netCDF4 as nc4
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Morph NetCDF not found: {path}")
+    with nc4.Dataset(path) as ds:
+        x = ds["x"][:].data
+        y = ds["y"][:].data
+        nodata = -9999.0
+        for vname, var in ds.variables.items():
+            if vname in ("x", "y"):
+                continue
+            if var.ndim == 2:
+                nodata = float(getattr(var, "_FillValue", -9999.0))
+                break
+    cellsize = float(x[1] - x[0])
+    xllcorner = float(x.min() - 0.5 * cellsize)
+    yllcorner = float(y.min() - 0.5 * cellsize)
+    return {
+        "ncols":        len(x),
+        "nrows":        len(y),
+        "xllcorner":    xllcorner,
+        "yllcorner":    yllcorner,
+        "cellsize":     cellsize,
+        "NODATA_value": nodata,
+    }
+
+
 def read_projection_wkt(latlon_path: str | Path) -> str:
     """Extract the projection WKT from the meteo latlon.nc global attrs."""
     import netCDF4 as nc
