@@ -72,11 +72,20 @@ def write_gauge_file(
 
     n_per_day = 24 if cadence == "hourly" else 1
 
-    # Fill any gaps in the regular index with `nodata` so the file has no jumps.
+    # mHM derives the expected row count from whole days in the header, so the
+    # series must span midnight-to-midnight even when the source data does not.
     freq = "1h" if cadence == "hourly" else "1D"
-    idx = pd.date_range(series.index.min(), series.index.max(),
-                        freq=freq, tz="UTC")
-    filled = series["value"].reindex(idx).fillna(nodata)
+    start_day = series.index.min().normalize()
+    end_day = series.index.max().normalize()
+    end = end_day + pd.Timedelta(hours=23) if cadence == "hourly" else end_day
+    idx = pd.date_range(start_day, end, freq=freq, tz="UTC")
+
+    # Fill nodata and padded gaps with time-interpolated values; edges use the
+    # nearest observation since interpolation cannot extrapolate beyond them.
+    filled = series["value"].reindex(idx)
+    filled = filled.mask(filled == nodata)
+    filled = filled.interpolate(method="time", limit_direction="both")
+    filled = filled.ffill().bfill().fillna(nodata)
 
     start = filled.index.min()
     end   = filled.index.max()

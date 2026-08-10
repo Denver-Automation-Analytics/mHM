@@ -2,12 +2,15 @@
 
 # Imports #####################################################################
 import io
+import logging
 from typing import Optional
 import numpy as np
 import requests
 import pandas as pd
 import geopandas as gpd
 from pygeohydro import NWIS
+
+log = logging.getLogger(__name__)
 
 # Functions ###################################################################
 
@@ -103,6 +106,30 @@ def _map_qualifier(code: str) -> str:
     return s
 
 
+# UTC offsets for the tz codes USGS reports in the RDB tz_cd column.
+_TZ_OFFSETS = {
+    "EST": "-0500", "EDT": "-0400",
+    "CST": "-0600", "CDT": "-0500",
+    "MST": "-0700", "MDT": "-0600",
+    "PST": "-0800", "PDT": "-0700",
+    "AKST": "-0900", "AKDT": "-0800",
+    "HST": "-1000", "HDT": "-0900",
+}
+
+
+def _to_utc_index(dt_col: pd.Series, tz_col: Optional[pd.Series]) -> pd.DatetimeIndex:
+    """Parse USGS local timestamps to a tz-aware UTC index.
+
+    iv timestamps are local wall-clock with a per-row tz_cd (handles DST shifts);
+    daily values carry no tz and are treated as UTC dates.
+    """
+    dt = dt_col.astype(str).str.strip()
+    if tz_col is not None:
+        offsets = tz_col.astype(str).str.strip().map(_TZ_OFFSETS).fillna("+0000")
+        return pd.DatetimeIndex(pd.to_datetime(dt + " " + offsets, utc=True, errors="coerce"))
+    return pd.DatetimeIndex(pd.to_datetime(dt, utc=True, errors="coerce"))
+
+
 def get_nwis(site: str, 
              parameter: str,
              frequency: str,
@@ -128,63 +155,66 @@ def get_nwis(site: str,
     '''
 
     if parameter == 'Flow':
-        
+
         param_id = '00060'
+        url = (
+            f"https://waterservices.usgs.gov/nwis/{frequency}/?format={output_format}"
+            f"&sites={site}&startDT={start_date}&endDT={end_date}"
+            f"&parameterCd={param_id}&siteType=ST&agencyCd=USGS&siteStatus=all"
+        )
         try:
-            # build url and make call only for USGS funded sites
-            url = f"https://waterservices.usgs.gov/nwis/{frequency}/?format={output_format}&sites={site}&startDT={start_date}&endDT={end_date}&parameterCd={param_id}&siteType=ST&agencyCd=usgs&siteStatus=all"
-            r = requests.get(url)
+            r = requests.get(url, timeout=60)
+        except requests.RequestException as exc:
+            log.warning("NWIS request failed for site %s (%s): %s", site, url, exc)
+            return None
 
-            # check that api call worked
-            if r.status_code!=200:
-                print(f"Server response {r.status_code}: Returning None")
+        if r.status_code != 200:
+            log.warning("NWIS returned HTTP %s for site %s (%s)", r.status_code, site, url)
+            return None
+
+        try:
+            if output_format == 'rdb':
+                df = pd.read_table(io.StringIO(r.content.decode('utf-8')),
+                                   comment='#', skip_blank_lines=True)
+                df = df.iloc[1:].copy()   # drop the RDB format-definition row
+
+            # Select columns by name so extra time-series columns can't misalign parsing.
+            value_cols = [c for c in df.columns if "_00060" in c and not c.endswith("_cd")]
+            qual_cols = [c for c in df.columns if c.endswith("_cd")]
+            if df.empty or not value_cols or "datetime" not in df.columns:
+                log.info("No %s discharge for site %s in %s..%s", frequency, site, start_date, end_date)
                 return None
 
-            # decode results
-            if output_format=='rdb':
-                df = pd.read_table(io.StringIO(r.content.decode('utf-8')), 
-                                comment='#',
-                                skip_blank_lines=True)
-                df = df.iloc[1:].copy()
+            value_col = value_cols[0]
+            qual_col = qual_cols[0] if qual_cols else None
 
-            if frequency == 'iv':
-                data_col_idx = 4
-                qual_col_idx = 5
-            elif frequency == 'dv':
-                data_col_idx = 3
-                qual_col_idx = 4
-            timestep_idx = 2
-
-            if len(df.dropna()) == 0:
-                print('No data available for the time period specified')
+            first_val = str(df[value_col].values[0])
+            if first_val == 'ZFL':
+                log.info("Zero flow condition for site %s", site)
                 return None
-            elif df[df.columns[data_col_idx]].values[0] == 'ZFL':
-                print('Zero flow condition: Return None')
+            if first_val == '***':
+                log.info("Data temporarily unavailable for site %s", site)
                 return None
-            elif df[df.columns[data_col_idx]].values[0] == '***':
-                print('Data temporarily unavailable for the time period specified')
-                return None
-            elif set(df['site_no'].isnull()) == {True}:
+            if df['site_no'].isnull().all():
+                log.info("No site_no rows for site %s", site)
                 return None
 
-            qual_col = df.columns[qual_col_idx] if qual_col_idx < len(df.columns) else None
-            timestamps = pd.to_datetime(df[df.columns[timestep_idx]].values)
-            values = pd.to_numeric(df[df.columns[data_col_idx]], errors="coerce")
+            tz_col = df["tz_cd"] if "tz_cd" in df.columns else None
+            timestamps = _to_utc_index(df["datetime"], tz_col)
+            values = pd.to_numeric(df[value_col], errors="coerce")
             statuses = (
                 df[qual_col].map(_map_qualifier)
                 if qual_col is not None
                 else pd.Series("", index=df.index)
             )
-            final_df = pd.DataFrame(
+            return pd.DataFrame(
                 {"value": values.values, "approval_status": statuses.values},
                 index=timestamps,
             )
-            return final_df
-    
-        # when an incorrect gage number is sent to the api, we end up at usgs url (second failure mechanism)
-        except:
+        except Exception as exc:
+            log.warning("Failed to parse NWIS response for site %s (%s): %s", site, url, exc)
             return None
-    
+
     elif parameter == 'Precipitation':
         param_id = '00045'
         try:

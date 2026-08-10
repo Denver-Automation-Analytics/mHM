@@ -43,6 +43,33 @@ def read_gauge_info(id_map_csv: Path) -> List[Dict]:
     return sorted(gauges, key=lambda g: g["local_id"])
 
 
+def read_gauge_obs_window(gauge_dir: Path, gauges: List[Dict]) -> Tuple[date, date]:
+    """Return the observation window covered by every gauge file.
+
+    Parses the `start`/`end` header lines of each gauge `.txt` and returns
+    (latest start, earliest end) so the eval period fits inside all of them.
+    mHM checks coverage at day granularity, so only the date part is used.
+    """
+    starts: List[date] = []
+    ends: List[date] = []
+    for g in gauges:
+        path = gauge_dir / g["filename"]
+        header: Dict[str, date] = {}
+        with open(path) as f:
+            for line in f:
+                key, _, rest = line.strip().partition(" ")
+                if key in ("start", "end"):
+                    y, m, d = (int(v) for v in rest.split()[:3])
+                    header[key] = date(y, m, d)
+                if "start" in header and "end" in header:
+                    break
+        if "start" not in header or "end" not in header:
+            raise ValueError(f"Missing start/end header in gauge file {path}")
+        starts.append(header["start"])
+        ends.append(header["end"])
+    return max(starts), min(ends)
+
+
 def read_l1_resolution(soil_class_asc: Path) -> int:
     """Return L1 cellsize in metres from soil_class.asc ASCII header."""
     with open(soil_class_asc) as f:
@@ -97,19 +124,26 @@ def derive_eval_period(
     first_meteo: date,
     last_meteo: date,
     warming_days: int,
+    obs_start: date | None = None,
+    obs_end: date | None = None,
 ) -> Tuple[date, date]:
     """
-    Return (eval_start, eval_end) accounting for warming days.
+    Return (eval_start, eval_end) as the meteo period (after warming days)
+    intersected with the gauge observation window (obs_start, obs_end).
 
-    Raises ValueError if the available meteo period is too short.
+    Raises ValueError if the resulting period is empty.
     """
     eval_start = first_meteo + timedelta(days=warming_days)
     eval_end   = last_meteo
+    if obs_start is not None:
+        eval_start = max(eval_start, obs_start)
+    if obs_end is not None:
+        eval_end = min(eval_end, obs_end)
     if eval_start > eval_end:
-        total = (last_meteo - first_meteo).days
         raise ValueError(
-            f"warming_days={warming_days} exceeds available meteo period "
-            f"({total} days: {first_meteo} – {last_meteo}). "
-            f"Reduce WARMING_DAYS to at most {max(0, total - 1)}."
+            f"Empty evaluation period: meteo {first_meteo}–{last_meteo} "
+            f"(warming_days={warming_days}) does not overlap gauge window "
+            f"{obs_start}–{obs_end}. Align config START_DATE/END_DATE with the "
+            f"meteo forcing or reduce WARMING_DAYS."
         )
     return eval_start, eval_end

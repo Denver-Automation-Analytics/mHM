@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
 from pathlib import Path
 from dotenv import load_dotenv
 from pyproj import CRS as ProjCRS
@@ -42,7 +42,6 @@ if not os.environ.get("GHL_REPO"):
     )
 
 # ---- USER INPUTS ---------------------------------------------------
-WATERSHED_PATH        = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
 OUTPUT_DIR            = "/workspace/test_domain_3/input/luse"
 
 # --- GHL subscription ------------------------------------------------
@@ -93,7 +92,7 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     # 1. Build the L0 grid directly from the watershed boundary.
-    l0_header = build_l0_header_from_watershed(WATERSHED_PATH, L0_CELL_SIZE_M, OUTPUT_CRS)
+    l0_header = build_l0_header_from_watershed(DOMAIN_FILE, L0_CELL_SIZE_M, OUTPUT_CRS)
     log.info("L0 cellsize=%s m, ncols=%d, nrows=%d",
              l0_header["cellsize"], l0_header["ncols"], l0_header["nrows"])
 
@@ -116,7 +115,7 @@ def main() -> None:
         # Clip + reproject to L0 with majority (mode) resampling.
         lc_l0 = clip_and_reproject_to_grid(
             scene,
-            watershed_path=WATERSHED_PATH,
+            watershed_path=DOMAIN_FILE,
             target_crs_wkt=target_crs,
             header=l0_header,
             src_nodata=NODATA_SRC,

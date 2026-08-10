@@ -10,7 +10,7 @@ import os
 import gc
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, OUTPUT_CRS
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
 import geopandas as gpd
 import netCDF4 as nc4
 import overflow
@@ -201,238 +201,24 @@ def _warp_to_l0(src_tif: str, dst_tif: str, resample_alg: str,
     )
 
 
-def _condition_fdir_for_mhm(dem_nc: str, fdir_nc: str, facc_nc: str,
-                              l0_cellsize_m: float, l1_cellsize_m: float) -> None:
-    """Break fdir cycles and fix L11 boundary exits so mHM initialises without errors."""
-    D8 = {1: (0,1), 2: (1,1), 4: (1,0), 8: (1,-1),
-          16: (0,-1), 32: (-1,-1), 64: (-1,0), 128: (-1,1)}
-    # exit direction sets per block side, and the outward fdir to force if no exit exists
-    EXIT_DIRS = {
-        'top':    ({32, 64, 128}, 64),
-        'right':  ({1, 2, 128},    1),
-        'bottom': ({2, 4, 8},      4),
-        'left':   ({8, 16, 32},   16),
-    }
-    cell_factor = int(round(l1_cellsize_m / l0_cellsize_m))
+# overflow D8 codes (0=E,1=NE,2=N,3=NW,4=W,5=SW,6=S,7=SE) → ArcGIS powers-of-2 (mHM)
+_OVERFLOW_TO_ARCGIS = {0: 1, 1: 128, 2: 64, 3: 32, 4: 16, 5: 8, 6: 4, 7: 2}
 
-    with nc4.Dataset(dem_nc) as ds:
-        dem = np.array(ds['dem'][:])
-        fv_dem = float(ds['dem']._FillValue)
-    with nc4.Dataset(facc_nc) as ds:
-        facc = np.array(ds['facc'][:])
 
-    with nc4.Dataset(fdir_nc, 'r+') as ds_fdir:
-        fdir = np.array(ds_fdir['fdir'][:])
-        fv_fdir = int(ds_fdir['fdir']._FillValue)
-        nrows, ncols = fdir.shape
-        dem_mask = (dem != fv_dem) & ~np.isnan(dem)
+def _remap_fdir_to_arcgis(fdir_nc: str) -> None:
+    """Remap fdir.nc from overflow's 0-7 D8 codes to ArcGIS powers-of-2 in place.
 
-        # ── Fix 1: break all fdir cycles ─────────────────────────────────────
-        cycle_fixes = 0
-        for _pass in range(20):
-            valid = dem_mask & (fdir != fv_fdir)
-            facc_v = np.where(valid, facc, -1)
-            visited = np.zeros((nrows, ncols), dtype=bool)
-            in_cycle = np.zeros((nrows, ncols), dtype=bool)
-            for sr in range(nrows):
-                for sc in range(ncols):
-                    if not valid[sr, sc] or visited[sr, sc]:
-                        continue
-                    path, path_set = [], {}
-                    r, c = sr, sc
-                    while True:
-                        if not (0 <= r < nrows and 0 <= c < ncols) or not valid[r, c]:
-                            break
-                        if (r, c) in path_set:
-                            for pr, pc in path[path_set[(r, c)]:]:
-                                in_cycle[pr, pc] = True
-                            break
-                        path_set[(r, c)] = len(path)
-                        path.append((r, c))
-                        d = fdir[r, c]
-                        if d not in D8:
-                            break
-                        dr, dc = D8[d]
-                        r, c = r + dr, c + dc
-                    for pr, pc in path:
-                        visited[pr, pc] = True
-            if not in_cycle.any():
-                break
-            checked = np.zeros((nrows, ncols), dtype=bool)
-            for r in range(nrows):
-                for c in range(ncols):
-                    if not in_cycle[r, c] or checked[r, c]:
-                        continue
-                    group, cr, cc = [], r, c
-                    for _step in range(nrows * ncols):
-                        if checked[cr, cc]:
-                            break
-                        checked[cr, cc] = True
-                        group.append((cr, cc))
-                        d = fdir[cr, cc]
-                        if d not in D8:
-                            break
-                        dr, dc = D8[d]
-                        rn, cn = cr + dr, cc + dc
-                        if not (0 <= rn < nrows and 0 <= cn < ncols) or not in_cycle[rn, cn]:
-                            break
-                        cr, cc = rn, cn
-                    mn = min(group, key=lambda p: facc_v[p[0], p[1]])
-                    fdir[mn[0], mn[1]] = 0
-                    cycle_fixes += 1
-        if cycle_fixes:
-            print(f'  Broke {cycle_fixes} fdir cycle groups')
-
-        # ── Fix 2: ensure every active L11 cell has an outward boundary cell ─
-        fdir_eff = fdir.copy()
-        fdir_eff[~dem_mask] = fv_fdir
-        facc_eff = np.where(dem_mask, facc, -1)
-        nrows_l11 = -(-nrows // cell_factor)
-        ncols_l11 = -(-ncols // cell_factor)
-        l11_fixes = 0
-        for ic in range(nrows_l11):
-            for jc in range(ncols_l11):
-                iu = ic * cell_factor
-                id_ = min(iu + cell_factor, nrows)
-                jl = jc * cell_factor
-                jr = min(jl + cell_factor, ncols)
-                if not dem_mask[iu:id_, jl:jr].any():
-                    continue
-                # Simulate mHM first loop: outlet = downstream cell outside domain or fdir<=0
-                outlet_max = -1
-                for r in range(iu, id_):
-                    for c in range(jl, jr):
-                        if not dem_mask[r, c]:
-                            continue
-                        d = fdir_eff[r, c]
-                        if d in D8:
-                            dr, dc = D8[d]; r2, c2 = r + dr, c + dc
-                            if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
-                                outlet_max = max(outlet_max, facc_eff[r, c])
-                        elif d <= 0:
-                            outlet_max = max(outlet_max, facc_eff[r, c])
-                blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
-                if outlet_max == blk_max:
-                    continue  # first loop will set rowOut correctly
-                # First loop won't handle this block — redirect the max-facc boundary cell to
-                # exit unconditionally. This guarantees mHM's second loop always finds a valid
-                # outward-pointing boundary cell, regardless of what the existing fdir values are.
-                b_max, b_r, b_c, b_side = -1, -1, -1, None
-                for side_name, (_, out_dir) in EXIT_DIRS.items():
-                    for r, c in (
-                        [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
-                        [(ii, jr-1) for ii in range(iu, id_)] if side_name == 'right' else
-                        [(id_-1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
-                        [(ii, jl) for ii in range(iu, id_)]
-                    ):
-                        if dem_mask[r, c] and facc_eff[r, c] > b_max:
-                            b_max, b_r, b_c, b_side = facc_eff[r, c], r, c, side_name
-                if b_r >= 0:
-                    fdir[b_r, b_c] = EXIT_DIRS[b_side][1]
-                    fdir_eff[b_r, b_c] = EXIT_DIRS[b_side][1]
-                    l11_fixes += 1
-        if l11_fixes:
-            print(f'  Fixed {l11_fixes} L11 cells with no outward boundary exit')
-
-        # ── Fix 3: fallback for blocks with NO boundary domain cells (b_r==-1 above).
-        # Setting fdir=0 makes mHM's first loop treat the max-facc interior cell as an
-        # outlet, bypassing the second-loop boundary search entirely.
-        # Converges because fdir=0 assignments are monotone (never un-done).
-        fix3_count = 0
-        changed = True
-        while changed:
-            changed = False
-            for ic in range(nrows_l11):
-                for jc in range(ncols_l11):
-                    iu = ic * cell_factor
-                    id_ = min(iu + cell_factor, nrows)
-                    jl = jc * cell_factor
-                    jr = min(jl + cell_factor, ncols)
-                    if not dem_mask[iu:id_, jl:jr].any():
-                        continue
-                    outlet_max = -1
-                    for r in range(iu, id_):
-                        for c in range(jl, jr):
-                            if not dem_mask[r, c]:
-                                continue
-                            d = fdir_eff[r, c]
-                            if d in D8:
-                                dr, dc = D8[d]; r2, c2 = r + dr, c + dc
-                                if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
-                                    outlet_max = max(outlet_max, facc_eff[r, c])
-                            elif d <= 0:
-                                outlet_max = max(outlet_max, facc_eff[r, c])
-                    blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
-                    if outlet_max == blk_max:
-                        continue
-                    found = any(
-                        dem_mask[r, c] and fdir_eff[r, c] in dirs
-                        for side_name, (dirs, _) in EXIT_DIRS.items()
-                        for r, c in (
-                            [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
-                            [(ii, jr - 1) for ii in range(iu, id_)] if side_name == 'right' else
-                            [(id_ - 1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
-                            [(ii, jl) for ii in range(iu, id_)]
-                        )
-                    )
-                    if found:
-                        continue
-                    sub = facc_eff[iu:id_, jl:jr]
-                    lr, lc = np.unravel_index(np.argmax(sub), sub.shape)
-                    mr, mc = iu + lr, jl + lc
-                    if dem_mask[mr, mc] and fdir_eff[mr, mc] != 0:
-                        fdir[mr, mc] = 0
-                        fdir_eff[mr, mc] = 0
-                        changed = True
-                        fix3_count += 1
-        if fix3_count:
-            print(f'  Forced {fix3_count} interior outlet cells for remaining L11 failures')
-
-        # Final verification: confirm every active L11 block is handled
-        n_first, n_second, n_failed = 0, 0, 0
-        for ic in range(nrows_l11):
-            for jc in range(ncols_l11):
-                iu = ic * cell_factor
-                id_ = min(iu + cell_factor, nrows)
-                jl = jc * cell_factor
-                jr = min(jl + cell_factor, ncols)
-                if not dem_mask[iu:id_, jl:jr].any():
-                    continue
-                outlet_max = -1
-                for r in range(iu, id_):
-                    for c in range(jl, jr):
-                        if not dem_mask[r, c]:
-                            continue
-                        d = fdir_eff[r, c]
-                        if d in D8:
-                            dr, dc = D8[d]; r2, c2 = r + dr, c + dc
-                            if not (0 <= r2 < nrows and 0 <= c2 < ncols) or fdir_eff[r2, c2] <= 0:
-                                outlet_max = max(outlet_max, facc_eff[r, c])
-                        elif d <= 0:
-                            outlet_max = max(outlet_max, facc_eff[r, c])
-                blk_max = int(np.max(facc_eff[iu:id_, jl:jr]))
-                if outlet_max == blk_max:
-                    n_first += 1
-                    continue
-                found_any = any(
-                    dem_mask[r, c] and fdir_eff[r, c] in dirs
-                    for side_name, (dirs, _) in EXIT_DIRS.items()
-                    for r, c in (
-                        [(iu, jj) for jj in range(jl, jr)] if side_name == 'top' else
-                        [(ii, jr - 1) for ii in range(iu, id_)] if side_name == 'right' else
-                        [(id_ - 1, jj) for jj in range(jl, jr)] if side_name == 'bottom' else
-                        [(ii, jl) for ii in range(iu, id_)]
-                    )
-                )
-                if found_any:
-                    n_second += 1
-                else:
-                    n_failed += 1
-                    print(f'  WARNING: L11 block ({ic},{jc}) still unhandled after all fixes')
-        print(f'  Verification: {n_first} blocks via first loop, {n_second} via second loop, {n_failed} still unhandled')
-
-        ds_fdir['fdir'][:] = fdir
-        print(f'  fdir.nc conditioning complete')
+    Undefined cells (overflow code 8) become 0, which mHM treats as an outlet.
+    """
+    with nc4.Dataset(fdir_nc, 'r+') as ds:
+        fdir = np.array(ds['fdir'][:])
+        fv = int(ds['fdir']._FillValue)
+        out = fdir.copy()
+        for src, dst in _OVERFLOW_TO_ARCGIS.items():
+            out[fdir == src] = dst
+        out[fdir == 8] = 0
+        out[fdir == fv] = fv
+        ds['fdir'][:] = out
 
 
 if __name__ == "__main__":
@@ -441,7 +227,6 @@ if __name__ == "__main__":
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
     CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
-    DOMAIN_FILE = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
     DEM_DIR  = "/workspace/test_domain_3/input/dem"
     TILES_DIR = "/workspace/test_domain_3/input/dem/tiles"
     MORPH_DIR = "/workspace/test_domain_3/input/morph"
@@ -478,18 +263,7 @@ if __name__ == "__main__":
                                         chunk_size=CHUNK_SIZE,
                                         working_dir=DEM_DIR)
 
-    # 3. Flow Routing
-    print("Calculating flow direction and accumulation...")
-    if not os.path.exists(f"{DEM_DIR}/fdr.tif"):
-        overflow.flow_direction(f"{DEM_DIR}/dem_corrected.tif",
-                                f"{DEM_DIR}/fdr.tif",
-                                chunk_size=CHUNK_SIZE)
-    if not os.path.exists(f"{DEM_DIR}/accum.tif"):
-        overflow.flow_accumulation_tiled(f"{DEM_DIR}/fdr.tif",
-                                         f"{DEM_DIR}/accum.tif",
-                                         chunk_size=CHUNK_SIZE)
-
-    # 4. Terrain Attributes
+    # 3. Terrain Attributes
     print("Calculating slope and aspect...")
     if not os.path.exists(f"{DEM_DIR}/slope.tif"):
         gdal.DEMProcessing(f"{DEM_DIR}/slope.tif",
@@ -501,7 +275,7 @@ if __name__ == "__main__":
                            f"{DEM_DIR}/dem_corrected.tif",
                            "aspect")
 
-    # 5. Resample terrain derivatives to L0 grid
+    # 4. Resample terrain derivatives to L0 grid
     print("Resampling terrain derivatives to L0 grid...")
     xmin, ymin, xmax, ymax, cellsize, crs_wkt = _build_l0_grid_from_domain(
         model_perimeter, L0_CELL_SIZE_M, OUTPUT_CRS
@@ -511,20 +285,39 @@ if __name__ == "__main__":
     l0_dir = os.path.join(DEM_DIR, "l0")
     os.makedirs(l0_dir, exist_ok=True)
 
-    # algorithm per variable: average for continuous, mode for categorical, sum for accumulation
+    # algorithm per variable: average for continuous derivatives
     _resample_jobs = [
         (f"{DEM_DIR}/dem_corrected.tif", f"{l0_dir}/dem_l0.tif",    "average"),
         (f"{DEM_DIR}/slope.tif",          f"{l0_dir}/slope_l0.tif",  "average"),
         (f"{DEM_DIR}/aspect.tif",         f"{l0_dir}/aspect_l0.tif", "average"),
-        (f"{DEM_DIR}/fdr.tif",            f"{l0_dir}/fdir_l0.tif",   "mode"),
-        (f"{DEM_DIR}/accum.tif",          f"{l0_dir}/facc_l0.tif",   "sum"),
     ]
     for src, dst, alg in _resample_jobs:
         if not os.path.exists(dst):
             print(f"  {os.path.basename(src)} → {os.path.basename(dst)} ({alg})")
             _warp_to_l0(src, dst, alg, xmin, ymin, xmax, ymax, cellsize, crs_wkt)
 
-    # 6. Write mHM-ready NetCDF files from L0-resampled TIFs
+    # 4b. Derive flow direction and accumulation on the L0 DEM.
+    # Flow direction is categorical and cannot be resampled; recompute it on the
+    # L0 DEM so the coarse network stays hydrologically connected. fix_flats
+    # resolves directions across filled/flat areas (else the network fragments).
+    print("Deriving flow direction and accumulation on the L0 grid...")
+    dem_l0        = f"{l0_dir}/dem_l0.tif"
+    dem_l0_filled = f"{l0_dir}/dem_l0_corrected.tif"
+    fdir_l0_raw   = f"{l0_dir}/fdir_l0_raw.tif"
+    fdir_l0       = f"{l0_dir}/fdir_l0.tif"
+    facc_l0       = f"{l0_dir}/facc_l0.tif"
+    if not os.path.exists(dem_l0_filled):
+        overflow.fill_depressions_tiled(dem_l0, dem_l0_filled,
+                                        chunk_size=CHUNK_SIZE, working_dir=l0_dir)
+    if not os.path.exists(fdir_l0_raw):
+        overflow.flow_direction(dem_l0_filled, fdir_l0_raw, chunk_size=CHUNK_SIZE)
+    if not os.path.exists(fdir_l0):
+        overflow.fix_flats_tiled(dem_l0_filled, fdir_l0_raw, fdir_l0,
+                                 chunk_size=CHUNK_SIZE, working_dir=l0_dir)
+    if not os.path.exists(facc_l0):
+        overflow.flow_accumulation_tiled(fdir_l0, facc_l0, chunk_size=CHUNK_SIZE)
+
+    # 5. Write mHM-ready NetCDF files from L0-resampled TIFs
     print("Writing mHM-ready NetCDF files...")
     os.makedirs(MORPH_DIR, exist_ok=True)
     write_nc(f"{l0_dir}/dem_l0.tif",    f"{MORPH_DIR}/dem.nc",    dtype="float32", var_name="dem",    block_size=CHUNK_SIZE)
@@ -532,6 +325,4 @@ if __name__ == "__main__":
     write_nc(f"{l0_dir}/aspect_l0.tif", f"{MORPH_DIR}/aspect.nc", dtype="float32", var_name="aspect", block_size=CHUNK_SIZE)
     write_nc(f"{l0_dir}/fdir_l0.tif",   f"{MORPH_DIR}/fdir.nc",   dtype="int32",   var_name="fdir",   block_size=CHUNK_SIZE)
     write_nc(f"{l0_dir}/facc_l0.tif",   f"{MORPH_DIR}/facc.nc",   dtype="int32",   var_name="facc",   block_size=CHUNK_SIZE)
-    # Note: fdir conditioning (Fix 1/2/3) is applied in mod18 AFTER it remaps the
-    # pysheds-encoded fdir to ArcGIS D8 powers-of-2.  Do not condition here since
-    # the direction encoding at this stage is pysheds sequential (0–8), not ArcGIS.
+    _remap_fdir_to_arcgis(f"{MORPH_DIR}/fdir.nc")

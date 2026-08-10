@@ -58,7 +58,8 @@ def write_lai_nc(
 
     lai_base = snapshot_ds["Lai"].clip(_LAI_MIN, _LAI_MAX)
     # Fill cloud/QC gaps with domain median so mHM finds no nodata within its mask.
-    domain_median = float(lai_base.median(skipna=True))
+    # Load into memory first: dask's nanmedian can't reduce over all axes at once.
+    domain_median = float(np.nanmedian(lai_base.values))
     if np.isnan(domain_median):
         domain_median = 1.0  # fallback when the whole snapshot is missing
     lai_base = lai_base.fillna(domain_median)

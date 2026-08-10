@@ -21,11 +21,12 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE
 from pathlib import Path
 
-from readers import derive_eval_period, read_gauge_info, read_lcover_scenes, read_meteo_dates, read_soil_info
+from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
 from nml_writer import write_mhm_nml
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,7 @@ OPTI_FUNCTION    = 9     # 9=1-KGE(Q); see mhm.nml comments for full list
 N_ITERATIONS     = 10
 WARMING_DAYS     = 0     # spin-up days before eval period; increase for multi-year meteo
 TIMESTEP         = 1     # model timestep [h]: 1=hourly, 24=daily
+SNAP_RADIUS_CELLS = 2    # gauge stream-snap search radius in L0 cells (±)
 
 REPO_PARAM_NML   = "/workspace/mhm_parameter.nml"
 REPO_OUTPUT_NML  = "/workspace/mhm_outputs.nml"
@@ -227,7 +229,8 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     """Burn gauge local_ids into an L0 ASCII raster in *morph_dir*.
 
     Reads gauge lat/lon from id_map.csv, projects to LCC, snaps each gauge to
-    the nearest valid L0 cell, and writes morph/idgauges.asc.
+    the highest-facc valid cell within SNAP_RADIUS_CELLS of the nearest cell
+    (so gauges land on the channel), and writes morph/idgauges.asc.
     Skips the operation if the file already exists with the correct grid.
     """
     import csv
@@ -245,6 +248,11 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
         dem_fill = float(ds.variables["dem"]._FillValue)
     ncols, nrows = len(x_l0), len(y_l0)
 
+    # Flow accumulation for stream-snapping (same L0 grid/mask as the DEM)
+    with nc4_mod.Dataset(morph_dir / "facc.nc") as ds:
+        facc_vals = np.array(ds.variables["facc"][:])
+        facc_fill = int(ds.variables["facc"]._FillValue)
+
     # Check if file already matches
     if dst.exists():
         hdr = _ascii_header(dst)
@@ -258,6 +266,8 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
 
     # Valid-domain mask (True where DEM has data)
     valid = (dem_vals != dem_fill)
+    # facc restricted to valid cells; -1 marks nodata so argmax ignores it
+    facc_stream = np.where(valid & (facc_vals != facc_fill), facc_vals, -1)
 
     grid = np.full((nrows, ncols), -9999, dtype=np.int32)
 
@@ -275,10 +285,23 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
             ci = int(np.argmin(np.abs(x_l0 - gx)))   # column index
             ri = int(np.argmin(np.abs(y_l0 - gy)))   # row index (y descends)
 
-            # Stay in bounds and within valid domain
+            # Stay in bounds
             ci = max(0, min(ci, ncols - 1))
             ri = max(0, min(ri, nrows - 1))
-            if valid[ri, ci]:
+
+            # Stream-snap onto the highest-facc valid cell in a small window
+            r0, r1 = max(0, ri - SNAP_RADIUS_CELLS), min(nrows, ri + SNAP_RADIUS_CELLS + 1)
+            c0, c1 = max(0, ci - SNAP_RADIUS_CELLS), min(ncols, ci + SNAP_RADIUS_CELLS + 1)
+            win = facc_stream[r0:r1, c0:c1]
+            if win.max() >= 0:
+                lr, lc = np.unravel_index(int(np.argmax(win)), win.shape)
+                sri, sci = r0 + lr, c0 + lc
+                if (sri, sci) != (ri, ci):
+                    log.info("Gauge %d snapped (%d,%d)→(%d,%d)  facc %d→%d",
+                             gid, ri, ci, sri, sci,
+                             int(facc_stream[ri, ci]), int(facc_stream[sri, sci]))
+                grid[sri, sci] = gid
+            elif valid[ri, ci]:
                 grid[ri, ci] = gid
 
     xres = float(x_l0[1] - x_l0[0])
@@ -297,104 +320,6 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
 
     n_placed = int((grid != -9999).sum())
     log.info("Written: %s  (%d gauges placed)", dst, n_placed)
-
-
-# pysheds sequential D8 → ArcGIS D8 powers-of-2 (what mHM expects)
-_PYSHEDS_TO_ARCGIS = {0: -9999, 1: 1, 2: 2, 3: 4, 4: 8, 5: 16, 6: 32, 7: 64, 8: 128}
-
-
-def _remap_fdir_to_arcgis(morph_dir: Path) -> None:
-    """Remap fdir.nc from pysheds sequential (0–8) to ArcGIS D8 encoding.
-
-    pysheds: 1=E 2=SE 3=S 4=SW 5=W 6=NW 7=N 8=NE  (0=flat/nodata)
-    ArcGIS:  1=E 2=SE 4=S 8=SW 16=W 32=NW 64=N 128=NE  (mHM convention)
-    Also includes 0 (sink/outlet forced by conditioning) in the valid set.
-    The nodata fill step runs regardless of whether remapping was needed.
-    """
-    import netCDF4 as nc4_mod
-    import numpy as np
-
-    fdir_nc = morph_dir / "fdir.nc"
-    with nc4_mod.Dataset(fdir_nc) as ds:
-        fdir = np.array(ds.variables["fdir"][:])
-        fill = int(ds.variables["fdir"]._FillValue)
-
-    # 0 = sink forced by conditioning; treat as already-valid ArcGIS value
-    arcgis_vals = {0, 1, 2, 4, 8, 16, 32, 64, 128}
-    valid = fdir[fdir != fill]
-    unique = set(int(v) for v in np.unique(valid))
-
-    if unique.issubset(arcgis_vals):
-        out = fdir  # already ArcGIS encoded (or conditioned) — skip remap
-    else:
-        log.info("Remapping fdir.nc: pysheds 0–8 → ArcGIS D8 powers-of-2 …")
-        out = np.full_like(fdir, fill)
-        for src_val, dst_val in _PYSHEDS_TO_ARCGIS.items():
-            mask = fdir == src_val
-            out[mask] = dst_val
-
-    # Always fill nodata within the DEM valid mask (flat/boundary cells).
-    # This is needed both after remapping and on subsequent mod18 runs where
-    # the remap was already done but some DEM-edge cells may still be nodata.
-    with nc4_mod.Dataset(morph_dir / "dem.nc") as ds:
-        dem_fill = float(ds.variables["dem"]._FillValue)
-        dem_arr  = np.array(ds.variables["dem"][:])
-
-    broken = (out == fill) & (dem_arr != dem_fill)
-    n_broken = int(broken.sum())
-    if n_broken > 0:
-        log.info("Filling %d flat/nodata fdir cells via nearest-valid-neighbour …", n_broken)
-        from scipy.ndimage import distance_transform_edt
-        valid_mask = out != fill
-        _, (nr, nc_) = distance_transform_edt(
-            ~valid_mask, return_distances=True, return_indices=True
-        )
-        out[broken] = out[nr[broken], nc_[broken]]
-        with nc4_mod.Dataset(fdir_nc, "r+") as ds:
-            ds.variables["fdir"][:] = out
-        log.info("fdir.nc remapped.")
-    elif out is not fdir:
-        # remap happened but no fill needed — still write back
-        with nc4_mod.Dataset(fdir_nc, "r+") as ds:
-            ds.variables["fdir"][:] = out
-        log.info("fdir.nc remapped.")
-
-
-def _fix_facc_boundary_nodata(morph_dir: Path) -> None:
-    """Fill facc nodata cells that lie within the DEM valid mask with 1.
-
-    At domain boundaries, GDAL sum-resampling of the 10m accumulation raster
-    can leave nodata in 300m cells that the DEM (average-resampled) considers
-    valid.  mHM requires facc to be defined everywhere the DEM is defined.
-    A value of 1 (self-drainage) is the minimum physically meaningful value.
-    """
-    import netCDF4 as nc4_mod
-    import numpy as np
-
-    dem_nc  = morph_dir / "dem.nc"
-    facc_nc = morph_dir / "facc.nc"
-
-    with nc4_mod.Dataset(dem_nc) as ds:
-        dem  = np.array(ds.variables["dem"][:])
-        dfil = float(ds.variables["dem"]._FillValue)
-
-    with nc4_mod.Dataset(facc_nc) as ds:
-        facc_var = ds.variables["facc"]
-        facc     = np.array(facc_var[:])
-        ffil     = int(facc_var._FillValue)
-
-    # Cells with valid DEM but missing facc
-    broken = (dem != dfil) & (facc == ffil)
-    n_broken = int(broken.sum())
-    if n_broken == 0:
-        return
-
-    log.info("Filling %d facc boundary nodata cells with 1 …", n_broken)
-    facc[broken] = 1
-
-    with nc4_mod.Dataset(facc_nc, "r+") as ds:
-        ds.variables["facc"][:] = facc
-    log.info("facc.nc updated.")
 
 
 def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int) -> None:
@@ -523,8 +448,23 @@ def main() -> None:
     first_meteo, last_meteo = read_meteo_dates(inp / "meteo" / "pre" / "pre.nc")
     log.info("Meteo period: %s – %s", first_meteo, last_meteo)
 
+    gauges = read_gauge_info(inp / "gauge" / "id_map.csv")
+    if not gauges:
+        log.error("id_map.csv contains no gauges — calibration requires at least one.")
+        sys.exit(1)
+    log.info("Gauges: %s", [g["filename"] for g in gauges])
+
+    # Clamp the eval window to the dates covered by every gauge file so the
+    # simulation period never exceeds the observations mHM reads for calibration.
+    gauge_start, gauge_end = read_gauge_obs_window(inp / "gauge", gauges)
+    log.info("Gauge obs window (all gauges): %s – %s", gauge_start, gauge_end)
+
     try:
-        eval_start, eval_end = derive_eval_period(first_meteo, last_meteo, WARMING_DAYS)
+        eval_start, eval_end = derive_eval_period(
+            first_meteo, last_meteo, WARMING_DAYS,
+            obs_start=max(date.fromisoformat(START_DATE), gauge_start),
+            obs_end=min(date.fromisoformat(END_DATE), gauge_end),
+        )
     except ValueError as exc:
         log.error("%s", exc)
         sys.exit(1)
@@ -533,11 +473,6 @@ def main() -> None:
     lcover_scenes = read_lcover_scenes(inp / "luse")
     log.info("Land cover scenes: %s", [f for _, f in lcover_scenes])
 
-    gauges = read_gauge_info(inp / "gauge" / "id_map.csv")
-    if not gauges:
-        log.error("id_map.csv contains no gauges — calibration requires at least one.")
-        sys.exit(1)
-    log.info("Gauges: %s", [g["filename"] for g in gauges])
 
     resolution = L1_CELL_SIZE_M
     log.info("L1 resolution: %d m (from config.py; L0 terrain is %d m)", resolution, L0_CELL_SIZE_M)
@@ -550,20 +485,6 @@ def main() -> None:
     dem_nc = inp / "morph" / "dem.nc"
     _resample_ascii_to_l0(inp / "morph" / "soil_class.asc", dem_nc)
     _build_idgauges_asc(inp / "morph", inp / "gauge", dem_nc)
-    _remap_fdir_to_arcgis(inp / "morph")
-    _fix_facc_boundary_nodata(inp / "morph")
-    # Condition the ArcGIS-encoded fdir for mHM's routing network initialisation.
-    # This must run AFTER _remap_fdir_to_arcgis so the direction encoding is correct.
-    _mod10_dir = str(Path(__file__).parent.parent / "mod10_dem_to_mhm")
-    if _mod10_dir not in sys.path:
-        sys.path.insert(0, _mod10_dir)
-    from mod10_dem_to_mhm.main import _condition_fdir_for_mhm
-    _condition_fdir_for_mhm(
-        str(inp / "morph" / "dem.nc"),
-        str(inp / "morph" / "fdir.nc"),
-        str(inp / "morph" / "facc.nc"),
-        L0_CELL_SIZE_M, L1_CELL_SIZE_M,
-    )
     _ensure_latlon_nc(inp / "latlon", dem_nc, resolution)
 
     # Phase 3 — generate mhm.nml

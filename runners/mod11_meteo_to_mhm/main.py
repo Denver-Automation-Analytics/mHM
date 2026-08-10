@@ -27,7 +27,7 @@ from affine import Affine
 from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import OUTPUT_CRS, L2_CELL_SIZE_M
+from config import OUTPUT_CRS, L2_CELL_SIZE_M, START_DATE, END_DATE, DOMAIN_FILE
 from latlon_grid import mhm_l2_from_l0
 
 from hrrr_access   import open_hrrr, resolve_init_time, select_window
@@ -61,7 +61,7 @@ def main() -> None:
     log.info("HRRR CRS: %s", hrrr_crs)
 
     # 2. Watershed → LCC → snap to native HRRR grid
-    ws_lcc = load_and_prepare_watershed(WATERSHED_PATH, hrrr_crs)
+    ws_lcc = load_and_prepare_watershed(DOMAIN_FILE, hrrr_crs)
     bbox_lcc = snap_bbox_to_grid(ws_lcc.total_bounds, L2_CELL_SIZE_M)
     log.info("Snapped LCC bbox (m): %s", bbox_lcc)
 
@@ -139,14 +139,11 @@ def main() -> None:
 
 if __name__ == "__main__":
     # ---- USER INPUTS ---------------------------------------------------
-    WATERSHED_PATH   = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"     # .shp / .geojson / .gpkg
     L0_DEM           = "/workspace/test_domain_3/input/morph/dem.nc"
     INIT_TIME        = "latest"                      # "latest" or "YYYY-MM-DDTHH" (UTC)
     METEO_OUTPUT_DIR       = "/workspace/test_domain_3/input/meteo"  # output directory for mHM-ready files
     LATLON_OUTPUT_DIR      = "/workspace/test_domain_3/input/latlon" # output directory for latlon.nc
     FORECAST         = False                            # use forecast (True) or analysis (False) HRRR subscription
-    START_DATE       = "2024-09-01"                     # analysis only; "YYYY-MM-DD" or None for full period
-    END_DATE         = "2024-09-30"                     # analysis only; "YYYY-MM-DD" or None for full period
 
     # ---- FIXED -----------------------------------------------------------
     NODATA           = -9999.0

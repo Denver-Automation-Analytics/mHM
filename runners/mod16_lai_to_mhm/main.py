@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE
 
 from acquire_modis_lai import acquire_lai_map
 from writers import write_lai_nc
@@ -49,10 +49,6 @@ def main(boundary: str,
 
 
 if __name__ == "__main__":
-
-    DOMAIN_FILE = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
-    START_DATE = "2024-09-01"
-    END_DATE = "2024-09-30"
 
     sys.exit(main(DOMAIN_FILE,
                   START_DATE,

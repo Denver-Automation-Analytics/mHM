@@ -24,7 +24,7 @@ from pathlib import Path
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
 
 from soilgrids_access import download_soilgrids
 from regrid          import reproject_to_header
@@ -37,7 +37,6 @@ from utils           import (
 )
 
 # ---- USER INPUTS ---------------------------------------------------
-WATERSHED_PATH    = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
 L0_HEADER_PATH    = "/workspace/test_domain_3/input/gauge/header.txt"
 METEO_HEADER_PATH = "/workspace/test_domain_3/input/meteo/pre/header.txt"
 OUTPUT_DIR        = "/workspace/test_domain_3/input/morph"
@@ -75,7 +74,7 @@ def main() -> None:
 
     # 3. Download 18 SoilGrids GeoTIFFs (cached after first run).
     tif_paths = download_soilgrids(
-        WATERSHED_PATH, cache_dir, stat=STATS,
+        DOMAIN_FILE, cache_dir, stat=STATS,
     )
 
     # 4. Reproject each GeoTIFF to the soil grid and apply unit conversion.
