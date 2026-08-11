@@ -14,6 +14,7 @@ L2 (3 km meteo) is NOT written to latlon.nc; mHM reads meteo files directly.
 
 from __future__ import annotations
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -21,12 +22,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mod11_meteo_to_mhm"))
 from latlon_grid import create_latlon, derive_l_header  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import L1_CELL_SIZE_M  # noqa: E402
+from config import L1_CELL_SIZE_M, WORKING_DIR, OUTPUT_CRS  # noqa: E402
 
 # ---- USER INPUTS --------------------------------------------------
-TARGET_CRS  = "EPSG:5070"
-L0_HEADER   = "/workspace/test_domain_3/input/morph/dem.nc"
-OUTPUT_DIR  = "/workspace/test_domain_3/input/latlon"
+L0_HEADER   = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+OUTPUT_DIR  = os.path.join(WORKING_DIR, "input", "latlon")
 # -------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
     create_latlon(
         out_file   = out_file,
-        coord_sys  = TARGET_CRS,
+        coord_sys  = OUTPUT_CRS,
         header_l0  = l0,
         header_l1  = l1,
         header_l11 = l11,

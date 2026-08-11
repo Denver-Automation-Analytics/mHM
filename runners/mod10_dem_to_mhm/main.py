@@ -10,7 +10,7 @@ import os
 import gc
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
 import geopandas as gpd
 import netCDF4 as nc4
 import overflow
@@ -21,11 +21,10 @@ from pyproj import CRS as ProjCRS
 from clip import clip_mosaic
 from mosaic import mosaic_tiles
 
-NODATA = -9999
 
 def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
             res: int = 10,
-            save_dir: str = "/workspace/test_domain_3/input/dem"):
+            save_dir: str = os.path.join(WORKING_DIR, "input/dem")):
     """
     Get tiled DEM data within the model perimeter
 
@@ -36,7 +35,7 @@ def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
     res : int, optional
         The resolution of the DEM data to retrieve (default is 10 m)
     save_dir : str, optional
-        The directory to save the DEM data (default is "/workspace/test_domain_3/input/dem")
+        The directory to save the DEM data (default is os.path.join(WORKING_DIR, "input/dem"))
 
     Returns
     -------
@@ -227,9 +226,9 @@ if __name__ == "__main__":
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
     CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
-    DEM_DIR  = "/workspace/test_domain_3/input/dem"
-    TILES_DIR = "/workspace/test_domain_3/input/dem/tiles"
-    MORPH_DIR = "/workspace/test_domain_3/input/morph"
+    DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
+    TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
+    MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")
     # -------------------------------------------------------------------
 
     # 1. Get DEM data within the model perimeter

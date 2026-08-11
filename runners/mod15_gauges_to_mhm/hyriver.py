@@ -331,7 +331,7 @@ def _dominant_hourly_status(series: pd.Series) -> str:
     return next(iter(vals), "")
 
 
-def aggregate_to_hourly(df: pd.DataFrame) -> pd.DataFrame:
+def prep_hourly(df: pd.DataFrame) -> pd.DataFrame:
     """Resample iv DataFrame to 1-hour bins using a time-weighted mean.
 
     Each sub-hourly reading is weighted by the duration it represents
@@ -363,6 +363,24 @@ def aggregate_to_hourly(df: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame({"value": hourly_val, "approval_status": hourly_status})
 
+def prep_daily(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a dv DataFrame to a gap-free 1-day cadence.
+
+    USGS daily values already carry one reading per day, so this simply
+    regularizes the index: duplicate days are averaged and any missing
+    calendar days appear as NaN. Gap filling and NoData handling happen
+    downstream in ``interpolate_gaps``.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["value", "approval_status"])
+
+    df = df.sort_index().copy()
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+    daily_val = df["value"].resample("1D").mean()
+    daily_status = df["approval_status"].resample("1D").apply(_dominant_hourly_status)
+
+    return pd.DataFrame({"value": daily_val, "approval_status": daily_status})
 
 def interpolate_gaps(
     df: pd.DataFrame,

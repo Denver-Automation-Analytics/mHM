@@ -255,6 +255,68 @@ def build_lai_snapshot(ds, reducer: str = "median", max_scf_qc: int = 1):
     return out
 
 
+def build_lai_monthly_climatology(ds, reducer: str = "median", max_scf_qc: int = 1):
+    """
+    Collapse the loaded cube into a 12-month LAI climatology (m2/m2).
+
+    Identical QC/scaling to ``build_lai_snapshot`` but reduces per-pixel within
+    each calendar month (across all years in the window) instead of over the
+    whole time axis. Returns ``Lai(month, y, x)`` with ``month`` reindexed to a
+    full 1..12; months with no valid observation are left NaN for the writer to
+    fill. An ``n_obs(month, y, x)`` support band counts valid composites.
+
+    Parameters
+    ----------
+    reducer     : "median" (default, robust), "mean", "max", or "min".
+    max_scf_qc  : highest acceptable SCF_QC (0 = best only, 1 = best+good).
+    """
+    import xarray as xr
+
+    lai_dn = ds[LAI_ASSET]
+    qc = ds[QC_ASSET]
+
+    scf_qc = qc.astype("uint16") & 0b111          # bits 0-2
+    quality_ok = scf_qc <= max_scf_qc
+    range_ok = lai_dn <= LAI_VALID_MAX
+    mask = quality_ok & range_ok
+
+    lai = (lai_dn.where(mask) * LAI_SCALE).astype("float32")
+
+    reducers = {"mean", "median", "max", "min"}
+    if reducer not in reducers:
+        raise ValueError(f"reducer must be one of {sorted(reducers)}")
+
+    log.info(
+        "Building 12-month climatology from %d composites (reducer='%s').",
+        ds.sizes.get("time", 0), reducer,
+    )
+
+    all_months = list(range(1, 13))
+    monthly = (
+        getattr(lai.groupby("time.month"), reducer)(dim="time", skipna=True)
+        .reindex(month=all_months)
+        .rename("Lai")
+    )
+    n_obs = (
+        mask.groupby("time.month").sum(dim="time")
+        .reindex(month=all_months, fill_value=0)
+        .rename("n_obs")
+        .astype("int16")
+    )
+
+    out = xr.merge([monthly, n_obs])
+    out["Lai"].attrs.update(
+        long_name="Leaf Area Index (12-month climatology)",
+        units="m2/m2",
+        source=COLLECTION_ID,
+        reducer=reducer,
+        scale_factor_applied=LAI_SCALE,
+        max_scf_qc=max_scf_qc,
+        mode="monthly_climatology",
+    )
+    return out
+
+
 def clip_to_boundary(snapshot_ds, boundary_ll: gpd.GeoDataFrame):
     """Mask the snapshot to the exact boundary polygon (not just its bbox)."""
     import rioxarray  # noqa: F401  (registers the .rio accessor)
@@ -293,22 +355,29 @@ def acquire_lai_map(
     scale_m: int = NATIVE_SCALE_M,
     output_crs: str = "EPSG:4326",
     chunks: Optional[dict] = None,
+    monthly: bool = False,
 ):
     """
-    End-to-end: GeoDataFrame boundary -> single representative LAI snapshot,
+    End-to-end: GeoDataFrame boundary -> representative LAI field(s),
     sourced from the Microsoft Planetary Computer.
 
-    Returns an ``xarray.Dataset`` with a single-band ``Lai`` snapshot (m2/m2)
-    plus an ``n_obs`` support band, clipped/scaled/QC-masked and reduced over
-    the window. If ``out_tif`` is given, the snapshot is also written locally.
-    Import this function to use the workflow inside a notebook or pipeline.
+    With ``monthly=False`` (default) returns an ``xarray.Dataset`` with a single
+    2-D ``Lai`` snapshot (m2/m2). With ``monthly=True`` returns a 12-month
+    climatology ``Lai(month, y, x)`` (see ``build_lai_monthly_climatology``),
+    suitable for mHM ``timeStep_LAI_input = 1``. Both carry an ``n_obs`` support
+    band and are clipped/scaled/QC-masked over the window. If ``out_tif`` is
+    given (2-D mode only), the snapshot is also written locally. Import this
+    function to use the workflow inside a notebook or pipeline.
     """
     catalog = open_catalog()
     boundary_ll = dissolve_boundary(boundary)
     items = search_items(catalog, boundary_ll, start_date, end_date)
     cube = load_cube(items, boundary_ll, scale_m=scale_m,
                      output_crs=output_crs, chunks=chunks)
-    snapshot = build_lai_snapshot(cube, reducer=reducer, max_scf_qc=max_scf_qc)
+    if monthly:
+        snapshot = build_lai_monthly_climatology(cube, reducer=reducer, max_scf_qc=max_scf_qc)
+    else:
+        snapshot = build_lai_snapshot(cube, reducer=reducer, max_scf_qc=max_scf_qc)
     snapshot = clip_to_boundary(snapshot, boundary_ll)
 
     # Realize lazily-loaded data before writing/summarizing.
@@ -316,6 +385,9 @@ def acquire_lai_map(
         snapshot = snapshot.compute()
 
     if out_tif:
-        export_geotiff(snapshot, out_tif)
+        if monthly:
+            log.warning("out_tif is not supported for monthly climatology; skipping GeoTIFF export.")
+        else:
+            export_geotiff(snapshot, out_tif)
     return snapshot
 

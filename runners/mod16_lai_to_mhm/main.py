@@ -1,5 +1,4 @@
-
-
+import os
 import sys
 import numpy as np
 import geopandas as gpd
@@ -7,7 +6,7 @@ import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE, WORKING_DIR
 
 from acquire_modis_lai import acquire_lai_map
 from writers import write_lai_nc
@@ -34,6 +33,7 @@ def main(boundary: str,
         scale_m=L0_CELL_SIZE_M,
         output_crs=OUTPUT_CRS,
         chunks=chunk_dict,
+        monthly=True,
     )
 
     try:
@@ -53,4 +53,5 @@ if __name__ == "__main__":
     sys.exit(main(DOMAIN_FILE,
                   START_DATE,
                   END_DATE,
-                  out_nc="/workspace/test_domain_3/input/lai/lai.nc"))
+                  out_nc=os.path.join(WORKING_DIR, "input", "lai", "lai.nc"))
+    )

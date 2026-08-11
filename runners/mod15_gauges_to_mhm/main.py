@@ -27,11 +27,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE
+from config import OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
 
 import geopandas as gpd
 
-from hyriver      import get_usgs_stations, get_nwis, aggregate_to_hourly, interpolate_gaps
+from hyriver      import get_usgs_stations, get_nwis, prep_hourly, prep_daily, interpolate_gaps
 from mhm_format   import to_m3s, filter_by_qualifiers, write_gauge_file
 from idgauges     import build_idgauges_grid, write_id_map
 from writers      import write_nc
@@ -41,16 +41,13 @@ from utils        import load_header_from_nc, write_header_txt, read_projection_
 REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
 
-# ---- USER INPUTS ---------------------------------------------------
-OUTPUT_DIR            = "/workspace/test_domain_3/input/gauge"
+# ---- OUTPUTS ---------------------------------------------------
+OUTPUT_DIR            = os.path.join(WORKING_DIR, "input", "gauge")
 
 # --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
-L0_MORPH_NC_PATH      = "/workspace/test_domain_3/input/morph/dem.nc"
+L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
 TARGET_CRS_WKT        = OUTPUT_CRS
-LATLON_NC_PATH        = "/workspace/test_domain_3/input/latlon/latlon.nc"
-
-# --- Time & cadence ------------------------------------------------
-CADENCE               = "hourly"    # "daily" or "hourly"
+LATLON_NC_PATH        = os.path.join(WORKING_DIR, "input", "latlon", "latlon.nc")
 
 # --- Retrieval knobs -----------------------------------------------
 SITE_TYPE_CODE        = "ST"       # Stream sites
@@ -62,7 +59,6 @@ CHUNK_YEARS           = 1          # break continuous requests into 1-yr chunks
 MAX_WORKERS           = 4          # parallel per-gauge network calls
 
 # --- Constants -----------------------------------------------------
-NODATA                = -9999
 MAX_GAP_HOURS         = None       # None -> interpolate all gaps; int to cap gap size
 LOG_LEVEL             = logging.INFO
 
@@ -107,13 +103,19 @@ def main() -> None:
 
     # 4. Fetch iv, aggregate to hourly, QC-filter, convert units, interpolate gaps.
     survivors = []          # list of (site_no, name, lat, lon, series_df)
+    if TIMESTEP == "hourly":
+        frequency = "iv"
+    elif TIMESTEP == "daily":
+        frequency = "dv"
+    else:
+        raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
     for _, row in gauges_in.iterrows():
         site_no = row["site_no"]
         name    = row.get("station_nm", row.get("name", str(site_no)))
         raw = get_nwis(
             site       = site_no,
             parameter  = "Flow",
-            frequency  = "iv",
+            frequency  = frequency,
             start_date = START_DATE,
             end_date   = END_DATE,
         )
@@ -121,12 +123,18 @@ def main() -> None:
             log.warning("Skipping %s (%s): fetch returned None.", site_no, name)
             continue
 
-        hourly = aggregate_to_hourly(raw)
-        if hourly.empty:
-            log.warning("Skipping %s (%s): no data after hourly aggregation.", site_no, name)
-            continue
+        if TIMESTEP == "hourly":
+            prep_df = prep_hourly(raw)
+            if prep_df.empty:
+                log.warning("Skipping %s (%s): no data after hourly aggregation.", site_no, name)
+                continue
+        elif TIMESTEP == "daily":
+            prep_df = prep_daily(raw)
+            if prep_df.empty:
+                log.warning("Skipping %s (%s): no data after daily aggregation.", site_no, name)
+                continue
 
-        clean = filter_by_qualifiers(hourly, policy=QUALIFIER_POLICY, nodata=NODATA)
+        clean = filter_by_qualifiers(prep_df, policy=QUALIFIER_POLICY, nodata=NODATA)
         clean = to_m3s(clean, nodata=NODATA)
         clean = interpolate_gaps(clean, nodata=NODATA, max_gap_hours=MAX_GAP_HOURS)
 
@@ -154,7 +162,10 @@ def main() -> None:
         print("[hydro] No gauges survived QC. Exiting.")
         sys.exit(0)
 
-    # 5. Assign sequential local IDs and write per-gauge files.
+    # 5.1 Filter out gauges that are undersirable as specified by the user in config.py
+    survivors = [g for g in survivors if g["site_no"] in WANTED_GAUGE_IDS]
+
+    # 5.2 Assign sequential local IDs and write per-gauge files.
     for local_id, g in enumerate(survivors, start=1):
         g["local_id"] = local_id
         write_gauge_file(
@@ -163,9 +174,11 @@ def main() -> None:
             site_no      = g["site_no"],
             name         = g["name"],
             series       = g["series"],
-            cadence      = CADENCE,
+            cadence      = TIMESTEP,
             nodata       = NODATA,
         )
+
+
 
     # 6. Build and write idgauges.asc + id_map.csv + header.txt.
     grid = build_idgauges_grid(
@@ -177,7 +190,7 @@ def main() -> None:
     write_nc(out_root / "idgauges.nc", l0_header, grid, nodata=NODATA)
     write_header_txt(l0_header, out_root / "header.txt")
     write_id_map(out_root / "id_map.csv", survivors,
-                 start=START_DATE, end=END_DATE, cadence=CADENCE)
+                 start=START_DATE, end=END_DATE, cadence=TIMESTEP)
 
     log.info("Done. %d gauge(s) written to %s", len(survivors), out_root)
 

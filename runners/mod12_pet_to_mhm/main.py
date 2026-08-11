@@ -13,12 +13,13 @@ mHM configuration expected:
 
 from __future__ import annotations
 import logging
+import os
 import sys
 from datetime import timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import OUTPUT_CRS  # noqa: E402
+from config import OUTPUT_CRS, NODATA, WORKING_DIR, PET_METHOD  # noqa: E402
 
 import numpy as np
 import pandas as pd
@@ -33,13 +34,11 @@ from writers import create_pet_nc, write_header_txt, write_pet_chunk
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
 # ---------------------------------------------------------------------------
-TAVG_FILE   = "/workspace/test_domain_3/input/meteo/tavg/tavg.nc"
-HEADER_FILE = "/workspace/test_domain_3/input/latlon/header.txt"   # shared with mod11
-PET_OUT_DIR = "/workspace/test_domain_3/input/meteo/pet"
-METHOD      = "penman_monteith"     # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
+TAVG_FILE   = os.path.join(WORKING_DIR, "input/meteo/tavg/tavg.nc")
+HEADER_FILE = os.path.join(WORKING_DIR, "input/latlon/header.txt")   # shared with mod11
+PET_OUT_DIR = os.path.join(WORKING_DIR, "input/meteo/pet")
 MAX_WORKERS = 10           # set >1 for multicore parallelism
-CHUNK_SIZE  = 24           # timesteps per batch; lower = less peak RAM
-NODATA      = -9999.0
+CHUNK_SIZE  = 256           # timesteps per batch; lower = less peak RAM
 
 # Optional: set both to enable methods that require tmin/tmax
 # (e.g. METHOD = "hargreaves_samani")
@@ -47,11 +46,11 @@ TMAX_FILE: str | None = None
 TMIN_FILE: str | None = None
 
 # Optional: set all four to enable penman_monteith
-SSRD_FILE = "/workspace/test_domain_3/input/meteo/ssrd/ssrd.nc"
-STRD_FILE = "/workspace/test_domain_3/input/meteo/strd/strd.nc"
-WINDSPEED_FILE = "/workspace/test_domain_3/input/meteo/windspeed/windspeed.nc"
-RHAVG_FILE = "/workspace/test_domain_3/input/meteo/rhavg/rhavg.nc"
-DEM_FILE = "/workspace/test_domain_3/input/dem/dem_corrected.tif"
+SSRD_FILE = os.path.join(WORKING_DIR, "input/meteo/ssrd/ssrd.nc")
+STRD_FILE = os.path.join(WORKING_DIR, "input/meteo/strd/strd.nc")
+WINDSPEED_FILE = os.path.join(WORKING_DIR, "input/meteo/windspeed/windspeed.nc")
+RHAVG_FILE = os.path.join(WORKING_DIR, "input/meteo/rhavg/rhavg.nc")
+DEM_FILE = os.path.join(WORKING_DIR, "input/dem/dem_corrected.tif")
 # ---------------------------------------------------------------------------
 
 log = logging.getLogger("pet_to_mhm")
@@ -118,15 +117,15 @@ def main() -> None:
     log.info("Detected frequency: %s  |  ref_time: %s", stat_freq, ref_time)
 
     # 2. Validate method requirements
-    if METHOD in METHODS_REQUIRING_TAVG and TAVG_FILE is None:
-        sys.exit(f"Method '{METHOD}' requires TAVG_FILE.")
-    if METHOD in METHODS_REQUIRING_TMAX_TMIN and (TMAX_FILE is None or TMIN_FILE is None):
-        sys.exit(f"Method '{METHOD}' requires both TMAX_FILE and TMIN_FILE.")
-    if METHOD in {"penman_monteith", "penman-monteith"}:
+    if PET_METHOD in METHODS_REQUIRING_TAVG and TAVG_FILE is None:
+        sys.exit(f"Method '{PET_METHOD}' requires TAVG_FILE.")
+    if PET_METHOD in METHODS_REQUIRING_TMAX_TMIN and (TMAX_FILE is None or TMIN_FILE is None):
+        sys.exit(f"Method '{PET_METHOD}' requires both TMAX_FILE and TMIN_FILE.")
+    if PET_METHOD in {"penman_monteith", "penman-monteith"}:
         missing_pm = [n for n, f in (("SSRD_FILE", SSRD_FILE), ("STRD_FILE", STRD_FILE),
                                       ("WINDSPEED_FILE", WINDSPEED_FILE), ("RHAVG_FILE", RHAVG_FILE)) if f is None]
         if missing_pm:
-            sys.exit(f"Method '{METHOD}' requires: {', '.join(missing_pm)}")
+            sys.exit(f"Method '{PET_METHOD}' requires: {', '.join(missing_pm)}")
 
     # 3. Optional tmin/tmax
     tmin = tmax = None
@@ -137,7 +136,7 @@ def main() -> None:
         tmax_var = next((v for v in ("tmax", "tasmax") if v in ds_tmax), list(ds_tmax.data_vars)[0])
         tmin = ds_tmin[tmin_var]
         tmax = ds_tmax[tmax_var]
-        if METHOD in METHODS_REQUIRING_TMAX_TMIN:
+        if PET_METHOD in METHODS_REQUIRING_TMAX_TMIN:
             validate_tmin_tmax(tmin=tmin.values, tmax=tmax.values)
 
     # PM inputs (ssrd, strd, windspeed, rhavg)
@@ -146,7 +145,7 @@ def main() -> None:
     if DEM_FILE is not None:
         elevation_m = _mean_elevation(DEM_FILE)
         log.info("Mean elevation from DEM: %.1f m", elevation_m)
-    if METHOD in {"penman_monteith", "penman-monteith"}:
+    if PET_METHOD in {"penman_monteith", "penman-monteith"}:
         log.info("Loading PM inputs from %s / %s / %s / %s",
                  SSRD_FILE, STRD_FILE, WINDSPEED_FILE, RHAVG_FILE)
         ds_ssrd      = xr.open_dataset(SSRD_FILE)
@@ -199,7 +198,7 @@ def main() -> None:
                 "lat":       lat3d,
                 "time":      t.to_pydatetime().replace(tzinfo=timezone.utc),
                 "stat_freq": stat_freq,
-                "method":    METHOD,
+                "method":    PET_METHOD,
                 "tavg":      tavg_chunk[i : i + 1],
                 "tmin":      tmin_chunk[i : i + 1] if tmin_chunk is not None else None,
                 "tmax":      tmax_chunk[i : i + 1] if tmax_chunk is not None else None,

@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
 from pathlib import Path
 from dotenv import load_dotenv
 from pyproj import CRS as ProjCRS
@@ -41,10 +41,10 @@ if not os.environ.get("GHL_REPO"):
         "an API key and add it to your .env file."
     )
 
-# ---- USER INPUTS ---------------------------------------------------
-OUTPUT_DIR            = "/workspace/test_domain_3/input/luse"
+# ---- OUTPUTS ---------------------------------------------------
+OUTPUT_DIR = os.path.join(WORKING_DIR, "input", "luse")
 
-# --- GHL subscription ------------------------------------------------
+# --- GHL subscription -------------------------------------------
 # Repo name is read from the GHL_REPO env var so it isn't hard-coded in source.
 GHL_REPO              = os.environ["GHL_REPO"]
 GHL_BRANCH_OR_TAG     = os.environ.get("GHL_BRANCH_OR_TAG", "main")
@@ -71,7 +71,7 @@ CLASS_MAP_GHL = {
     10: 3,   # Flooded non-forest vegetation -> Pervious
 }
 NODATA_SRC            = 255           # GHL native NoData
-NODATA_MHM            = -9999         # mHM convention
+NODATA_MHM            = NODATA         # mHM convention
 
 # --- QA -------------------------------------------------------------
 WRITE_NETCDF_COPY     = True

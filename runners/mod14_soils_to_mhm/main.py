@@ -24,7 +24,7 @@ from pathlib import Path
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
 
 from soilgrids_access import download_soilgrids
 from regrid          import reproject_to_header
@@ -37,11 +37,10 @@ from utils           import (
 )
 
 # ---- USER INPUTS ---------------------------------------------------
-L0_HEADER_PATH    = "/workspace/test_domain_3/input/gauge/header.txt"
-METEO_HEADER_PATH = "/workspace/test_domain_3/input/meteo/pre/header.txt"
-OUTPUT_DIR        = "/workspace/test_domain_3/input/morph"
+L0_HEADER_PATH    = os.path.join(WORKING_DIR, "input", "gauge", "header.txt")
+METEO_HEADER_PATH = os.path.join(WORKING_DIR, "input", "meteo", "pre", "header.txt")
+OUTPUT_DIR        = os.path.join(WORKING_DIR, "input", "morph")
 STATS             = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
-NODATA            = -9999
 SOIL_CELL_SIZE_M  = L0_CELL_SIZE_M     # native SoilGrids resolution; 3000 / 250 = 12
 TARGET_CRS_WKT    = OUTPUT_CRS
 OUTPUT_FORMAT     = "asc"   # "asc" (18 .txt files) or "nc" (single soil_layers.nc)

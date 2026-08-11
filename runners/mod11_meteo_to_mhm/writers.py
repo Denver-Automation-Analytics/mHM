@@ -13,6 +13,48 @@ import rioxarray  # noqa: F401  # registers .rio accessor
 
 log = logging.getLogger(__name__)
 
+# State variables interpolate across time; accumulations must not be invented.
+_STATE_VARS = ("tavg", "rhavg", "windspeed")
+_ACCUM_VARS = ("pre", "ssrd", "strd")
+
+
+def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
+                     crs: str | None) -> xr.DataArray:
+    """Fill nodata gaps so no sentinel survives inside the domain mask.
+
+    Spatially fills edge/partial gaps per timestep from nearest valid neighbours,
+    then temporally fills whole-missing timesteps: states are interpolated in
+    time, accumulations (pre, ssrd, strd) are zero-filled to avoid inventing mass.
+    """
+    da = da.where(da != nodata).load()
+
+    n_missing = int(np.isnan(da).sum())
+    empty_steps = int(np.isnan(da).all(dim=("y", "x")).sum())
+
+    if n_missing:
+        filled = da
+        if crs is not None:
+            filled = filled.rio.write_crs(crs)
+        # rioxarray keys "missing" off rio.nodata; point it at NaN so the
+        # gaps we just unmasked are the cells that get interpolated.
+        filled = filled.rio.write_nodata(np.nan).rio.interpolate_na(method="nearest")
+
+        n_after_spatial = int(np.isnan(filled).sum())
+        if var in _STATE_VARS:
+            filled = (filled.interpolate_na(dim="time", method="linear")
+                            .ffill("time").bfill("time"))
+        else:
+            filled = filled.fillna(0.0)
+
+        residual = int(np.isnan(filled).sum())
+        log.info("gap-fill %s: filled %d cells (spatial) + %d cells across %d "
+                 "empty timesteps (temporal); residual nodata: %d",
+                 var, n_missing - n_after_spatial, n_after_spatial,
+                 empty_steps, residual)
+        da = filled
+
+    return da.drop_vars("spatial_ref", errors="ignore")
+
 
 def _sanitize_attr_value(value):
     """Convert attrs to NetCDF-safe scalar/list-like values."""
@@ -62,8 +104,41 @@ def write_meteo(ds: xr.Dataset,
         },
     }
     ds_safe = _sanitize_dataset_attrs(ds)
+    # _FillValue is owned by encoding; drop any stray attr (e.g. left by
+    # mask_and_scale=False reads) so xarray does not raise on the conflict.
+    for name in ds_safe.variables:
+        ds_safe[name].attrs.pop("_FillValue", None)
     ds_safe.to_netcdf(out_path, encoding=encoding, format="NETCDF4")
     log.info("Wrote %s", out_path)
+
+
+def finalize_variable(temp_files: list[Path],
+                      out_path: Path,
+                      ref_time: pd.Timestamp,
+                      nodata: float,
+                      crs: str | None = None) -> None:
+    """Concatenate per-batch temp NetCDFs along time and write the final meteo file.
+
+    ``mask_and_scale=False`` keeps the nodata sentinel as data so ``write_meteo``
+    is the only place a ``_FillValue`` is applied (no double masking).
+    """
+    ordered = sorted(temp_files)
+    if not ordered:
+        raise ValueError(f"No temp files to concatenate for {out_path}")
+
+    ds = xr.open_mfdataset(
+        ordered,
+        combine="nested",
+        concat_dim="time",
+        mask_and_scale=False,
+        decode_times=True,
+    )
+    try:
+        var = list(ds.data_vars)[0]
+        ds[var] = _gap_fill_series(ds[var], var, nodata, crs)
+        write_meteo(ds, out_path, ref_time, nodata, crs=crs)
+    finally:
+        ds.close()
 
 
 def write_header_txt(header: dict, out_path: Path) -> None:

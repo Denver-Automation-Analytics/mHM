@@ -7,7 +7,7 @@ domain directory, then launches the mHM binary and streams its output.
 
 Run order: mod10 → mod11 → mod12 → mod13 → mod14 → mod15 → mod16 → mod17 → mod18.
 
-mHM invocation: the binary is run with cwd=DOMAIN_DIR so that it finds all
+mHM invocation: the binary is run with cwd=WORKING_DIR so that it finds all
 four nml files without path arguments.
 
 Geology: no dedicated runner exists; _bootstrap_geology() creates a single-class
@@ -23,7 +23,7 @@ import subprocess
 import sys
 from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WORKING_DIR
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -32,14 +32,16 @@ from nml_writer import write_mhm_nml
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
 # ---------------------------------------------------------------------------
-DOMAIN_DIR       = "/workspace/test_domain_3"
 MHM_BINARY       = "/workspace/build/mhm"
 
 OPTI_METHOD      = 1     # 1=DDS, 2=Simulated Annealing, 3=SCE
-OPTI_FUNCTION    = 9     # 9=1-KGE(Q); see mhm.nml comments for full list
+OPTI_FUNCTION    = 1     # 1=1-NSE(Q); see mhm.nml comments for full list
 N_ITERATIONS     = 10
 WARMING_DAYS     = 0     # spin-up days before eval period; increase for multi-year meteo
-TIMESTEP         = 1     # model timestep [h]: 1=hourly, 24=daily
+# Model timestep [h] derived from config.TIMESTEP (single source of truth).
+MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
+if MODEL_TIMESTEP_H is None:
+    raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
 SNAP_RADIUS_CELLS = 2    # gauge stream-snap search radius in L0 cells (±)
 
 REPO_PARAM_NML   = "/workspace/mhm_parameter.nml"
@@ -438,7 +440,7 @@ def validate_inputs(domain: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    domain = Path(DOMAIN_DIR)
+    domain = Path(WORKING_DIR)
     inp    = domain / "input"
 
     # Phase 1 — validate
@@ -493,7 +495,7 @@ def main() -> None:
         nml_path,
         domain,
         resolution_hydrology = resolution,
-        timestep             = TIMESTEP,
+        timestep             = MODEL_TIMESTEP_H,
         opti_method          = OPTI_METHOD,
         opti_function        = OPTI_FUNCTION,
         n_iterations         = N_ITERATIONS,

@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-def _lcover_block(scenes: List[Tuple[int, str]], last_year: int) -> str:
+def _lcover_block(scenes: List[Tuple[int, str]], first_year: int, last_year: int) -> str:
     lines = [f"  nLCoverScene = {len(scenes)}"]
     for i, (year, fname) in enumerate(scenes, start=1):
+        # First scene must cover the simulation start (incl. warming period).
+        start_y = min(year, first_year) if i == 1 else year
         end_y = scenes[i][0] - 1 if i < len(scenes) else last_year
         lines += [
-            f"  LCoverYearStart({i}) = {year}",
+            f"  LCoverYearStart({i}) = {start_y}",
             f"  LCoverYearEnd({i})   = {end_y}",
             f"  LCoverfName({i})     = '{fname}'",
         ]
@@ -174,7 +176,7 @@ def write_mhm_nml(
 /
 
 &LCover
-{_lcover_block(lcover_scenes, eval_end.year)}
+{_lcover_block(lcover_scenes, eval_start.year, eval_end.year)}
 /
 
 &time_periods
@@ -195,7 +197,7 @@ def write_mhm_nml(
 /
 
 &LAI_data_information
-  timeStep_LAI_input      = -2
+  timeStep_LAI_input      = 1
   inputFormat_gridded_LAI = "nc"
 /
 

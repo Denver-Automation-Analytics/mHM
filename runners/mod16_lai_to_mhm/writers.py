@@ -43,12 +43,15 @@ def write_lai_nc(
     nodata: float = -9999.0,
 ) -> None:
     """
-    Write a 12-month flat-climatology lai.nc for mHM timeStep_LAI_input = -2.
+    Write a 12-month gridded lai.nc for mHM timeStep_LAI_input = 1
+    (mean monthly gridded LAI climatology, cycled by calendar month).
 
-    ``snapshot_ds`` must contain a 2-D ``Lai`` variable (y, x) in m2/m2,
-    as returned by ``acquire_lai_map``. The same snapshot is tiled for every
-    month of the reference year so mHM's monthly reader sees ≥ 2 time steps
-    and the file covers any simulation period within that year.
+    ``snapshot_ds`` must contain a ``Lai`` variable in m2/m2 as returned by
+    ``acquire_lai_map``. If ``Lai`` carries a ``month`` dimension (from
+    ``monthly=True``), its 12 real monthly grids are written in Jan..Dec order.
+    Otherwise the single 2-D snapshot is tiled for every month of the reference
+    year, producing a flat annual climatology (legacy behaviour). Either way
+    mHM's monthly reader sees exactly 12 time steps with no nodata in the mask.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,20 +59,11 @@ def write_lai_nc(
     ref_year = pd.Timestamp(ref_month).year
     monthly_times = pd.date_range(f"{ref_year}-01-01", periods=12, freq="MS")
 
-    lai_base = snapshot_ds["Lai"].clip(_LAI_MIN, _LAI_MAX)
-    # Fill cloud/QC gaps with domain median so mHM finds no nodata within its mask.
-    # Load into memory first: dask's nanmedian can't reduce over all axes at once.
-    domain_median = float(np.nanmedian(lai_base.values))
-    if np.isnan(domain_median):
-        domain_median = 1.0  # fallback when the whole snapshot is missing
-    lai_base = lai_base.fillna(domain_median)
-
-    # Repeat the snapshot for each month to build a flat annual climatology.
-    lai = (
-        xr.concat([lai_base] * 12, dim=pd.DatetimeIndex(monthly_times, name="time"))
-        .rename("lai")                       # Fortran reader looks for variable 'lai'
-        .to_dataset()
-    )
+    lai_var = snapshot_ds["Lai"]
+    if "month" in lai_var.dims:
+        lai = _build_monthly_grids(lai_var, monthly_times)
+    else:
+        lai = _tile_snapshot(lai_var, monthly_times)
 
     lai.attrs["Conventions"] = "CF-1.6"
     lai["lai"].attrs.update(
@@ -93,4 +87,49 @@ def write_lai_nc(
     }
 
     _sanitize_ds(lai).to_netcdf(out_path, encoding=encoding, format="NETCDF4")
-    log.info("Wrote %s (12-month climatology, year %d)", out_path, ref_year)
+    log.info("Wrote %s (12-month grids, year %d)", out_path, ref_year)
+
+
+def _tile_snapshot(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex) -> xr.Dataset:
+    """Tile one 2-D snapshot into 12 identical monthly grids (flat climatology)."""
+    lai_base = lai_var.clip(_LAI_MIN, _LAI_MAX)
+    # Fill cloud/QC gaps with domain median so mHM finds no nodata within its mask.
+    # Load into memory first: dask's nanmedian can't reduce over all axes at once.
+    domain_median = float(np.nanmedian(lai_base.values))
+    if np.isnan(domain_median):
+        domain_median = 1.0  # fallback when the whole snapshot is missing
+    lai_base = lai_base.fillna(domain_median)
+
+    return (
+        xr.concat([lai_base] * 12, dim=pd.DatetimeIndex(monthly_times, name="time"))
+        .rename("lai")                       # Fortran reader looks for variable 'lai'
+        .to_dataset()
+    )
+
+
+def _build_monthly_grids(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex) -> xr.Dataset:
+    """
+    Build 12 real monthly grids (Jan..Dec) from a ``Lai(month, y, x)`` field.
+
+    Each month's cloud/QC gaps are filled with that month's spatial median; a
+    month with no valid pixel at all falls back to the annual median. mHM's
+    option-1 reader rejects any nodata inside the domain mask, so every grid
+    must be gap-free.
+    """
+    lai_clim = lai_var.reindex(month=list(range(1, 13))).clip(_LAI_MIN, _LAI_MAX)
+    lai_clim = lai_clim.load()
+
+    annual_median = float(np.nanmedian(lai_clim.values))
+    if np.isnan(annual_median):
+        annual_median = 1.0  # fallback when the whole climatology is missing
+
+    filled = []
+    for m in range(1, 13):
+        grid = lai_clim.sel(month=m)
+        month_median = float(np.nanmedian(grid.values))
+        fill = month_median if not np.isnan(month_median) else annual_median
+        filled.append(grid.fillna(fill))
+
+    lai = xr.concat(filled, dim=pd.DatetimeIndex(monthly_times, name="time"))
+    return lai.drop_vars("month", errors="ignore").rename("lai").to_dataset()
+
