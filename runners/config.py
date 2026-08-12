@@ -7,12 +7,13 @@ L1_CELL_SIZE_M = 1000      # Hydrologic simulation grid resolution (i.e., mHM ou
 L2_CELL_SIZE_M = 3000      # Meteorological grid resolution (mod11, mod12)
 OUTPUT_CRS     = "EPSG:5070"  # common projected CRS for all spatial outputs
 START_DATE      = "2016-10-01"  # start date for all simulations
-END_DATE        = "2020-10-31"  # end date for all simulations
-WARMUP_DAYS     = 365 * 2  # spin-up days consumed from the start of the forcing before the eval period (mod18)
-TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod18
-ROUTING_METHOD  = "muskingum"  # mRM routing (mod18): "muskingum" | "adaptive" | "adaptive_varying"
+END_DATE        = "2026-07-31"  # end date for all simulations
+WARMUP_DAYS     = 0  # spin-up days consumed from the start of the forcing before the eval period
+TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
+ROUTING_METHOD  = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
 OPTI_OBJECTIVE  = "kge"  # mod18 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge"
+N_ITERATIONS   = 500     # mod19 DDS optimizer trials; more = better calibration, longer runtime
 N_OMP_THREADS  = 10     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
 PET_METHOD     = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
-WANTED_GAUGE_IDS = ["08210000",]
+WANTED_GAUGE_IDS = ["08208000","08206600","08206700"] # "08210000",
 NODATA = -9999

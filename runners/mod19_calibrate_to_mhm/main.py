@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -47,7 +48,6 @@ if OPTI_FUNCTION is None:
     raise ValueError(
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
         "'nse', 'lnnse', 'nse_lnnse', 'kge', or 'multi_kge'.")
-N_ITERATIONS     = 10
 WARMING_DAYS     = WARMUP_DAYS  # spin-up days before eval period (from config.py)
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
@@ -143,6 +143,33 @@ def _bootstrap_geology(morph_dir: Path) -> None:
             for row in grid:
                 fh.write(" ".join(str(v) for v in row) + "\n")
         log.info("Written: %s", classmap)
+
+
+def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
+    """Trim the &geoparameter block to match nGeo_Formations (mHM requires equality)."""
+    classdef = morph_dir / "geology_classdefinition.txt"
+    if not (classdef.exists() and param_nml.exists()):
+        return
+    n_geo = int(classdef.read_text().split(None, 2)[1])
+
+    lines = param_nml.read_text().splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines)
+                     if l.strip().startswith("&geoparameter"))
+    except StopIteration:
+        return
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "/")
+    templates = [lines[i] for i in range(start + 1, end) if "GeoParam(" in lines[i]]
+    if not templates or len(templates) == n_geo:
+        return
+
+    rebuilt = []
+    for idx in range(1, n_geo + 1):
+        src = templates[idx - 1] if idx <= len(templates) else templates[-1]
+        rebuilt.append(re.sub(r"GeoParam\(\d+,:\)", f"GeoParam({idx},:)", src, count=1))
+    new_lines = lines[:start + 1] + rebuilt + lines[end:]
+    param_nml.write_text("\n".join(new_lines) + "\n")
+    log.info("Synced &geoparameter to %d geology unit(s): %s", n_geo, param_nml)
 
 
 def _ascii_header(path: Path) -> dict:
@@ -570,6 +597,8 @@ def main() -> None:
         dst = domain / name
         shutil.copy2(src, dst)
         log.info("Copied → %s", dst)
+
+    _sync_geoparameter(domain / "mhm_parameter.nml", inp / "morph")
 
     # Phase 5 — run mHM calibration
     log.info("Launching mHM calibration: %s  (cwd=%s)", MHM_BINARY, domain)
