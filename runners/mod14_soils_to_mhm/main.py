@@ -36,15 +36,6 @@ from utils           import (
     load_header,
 )
 
-# ---- USER INPUTS ---------------------------------------------------
-L0_HEADER_PATH    = os.path.join(WORKING_DIR, "input", "gauge", "header.txt")
-METEO_HEADER_PATH = os.path.join(WORKING_DIR, "input", "meteo", "pre", "header.txt")
-OUTPUT_DIR        = os.path.join(WORKING_DIR, "input", "morph")
-STATS             = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
-SOIL_CELL_SIZE_M  = L0_CELL_SIZE_M     # native SoilGrids resolution; 3000 / 250 = 12
-TARGET_CRS_WKT    = OUTPUT_CRS
-OUTPUT_FORMAT     = "asc"   # "asc" (18 .txt files) or "nc" (single soil_layers.nc)
-
 # --------------------------------------------------------------------
 
 
@@ -97,4 +88,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+
+    # ---- USER INPUTS ---------------------------------------------------
+    L0_HEADER_PATH    = os.path.join(WORKING_DIR, "input", "luse", "header.txt")
+    METEO_HEADER_PATH = os.path.join(WORKING_DIR, "input", "meteo", "pre", "header.txt")
+    OUTPUT_DIR        = os.path.join(WORKING_DIR, "input", "morph")
+    STATS             = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
+    SOIL_CELL_SIZE_M  = L0_CELL_SIZE_M     # native SoilGrids resolution; 3000 / 250 = 12
+    TARGET_CRS_WKT    = OUTPUT_CRS
+    OUTPUT_FORMAT     = "asc"   # "asc" (18 .txt files) or "nc" (single soil_layers.nc)
+    
     main()

@@ -289,9 +289,14 @@ def mhm_l2_from_l0(l0_header: HeaderLike, l2_cellsize: float) -> dict:
             f"l2_cellsize={l2_cellsize} is not an integer multiple of "
             f"l0_cellsize={h['cellsize']}"
         )
-    # mHM convention: ncols_in = h["nrows"] (y/N-S), nrows_in = h["ncols"] (x/E-W)
-    mhm_ncols_in = h["nrows"]
-    mhm_nrows_in = h["ncols"]
+    # mHM reads the DEM header with swapped args (mo_common_read_data.f90:
+    # read_header_nc_or_ascii(..., level0%nrows, level0%ncols, ...) but the
+    # dummy order is (header_ncols, header_nrows)). So internally mHM stores
+    # ncols = N-S (=ESRI nrows) and nrows = E-W (=ESRI ncols), and its
+    # calculate_grid_properties derives xll from ncols_in (N-S) and yll from
+    # nrows_in (E-W). Mirror that mapping exactly or the L2 origin won't match.
+    mhm_ncols_in = h["nrows"]   # N-S
+    mhm_nrows_in = h["ncols"]   # E-W
 
     mhm_ncols_out = _mhm_nint(mhm_ncols_in / cell_factor)
     if mhm_ncols_out * rounded < mhm_ncols_in:

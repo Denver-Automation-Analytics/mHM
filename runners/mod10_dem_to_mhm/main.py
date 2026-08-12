@@ -8,9 +8,10 @@ computes slope and aspect, and writes the results to NetCDF files suitable for m
 import math
 import os
 import gc
+import glob
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, DOMAIN_BUFFER_M, WORKING_DIR, NODATA
 import geopandas as gpd
 import netCDF4 as nc4
 import overflow
@@ -18,9 +19,28 @@ import seamless_3dep as s3dep
 import numpy as np
 from osgeo import gdal
 from pyproj import CRS as ProjCRS
+import rasterio
+from rasterio import features
+from shapely.geometry import shape, Point
+from shapely.ops import unary_union
+
 from clip import clip_mosaic
 from mosaic import mosaic_tiles
 
+def load_domain(buffer_m=None, crs=None):
+    """Return the domain polygon as a GeoDataFrame, grown by ``buffer_m`` meters.
+
+    Buffering is performed in OUTPUT_CRS (projected metres).
+    """
+
+    if buffer_m is None:
+        buffer_m = DOMAIN_BUFFER_M
+    gdf = gpd.read_file(DOMAIN_FILE)
+    src_crs = gdf.crs
+    projected = gdf.to_crs(OUTPUT_CRS)
+    if buffer_m:
+        projected["geometry"] = projected.geometry.buffer(buffer_m)
+    return projected.to_crs(crs if crs is not None else src_crs)
 
 def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
             res: int = 10,
@@ -45,12 +65,17 @@ def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
     # Get the bounding box in WGS84 (decimal degrees) as required by seamless_3dep
     bounds = model_perimeter.to_crs("EPSG:4326").total_bounds  # [minx, miny, maxx, maxy]
     bbox = (bounds[0], bounds[1], bounds[2], bounds[3])  # (west, south, east, north)
-    import gc
-    # Download DEM tiles (hash-named intermediates)
+    # Snapshot tiles already on disk so we can report cache hits vs new downloads
+    cached_before = set(glob.glob(os.path.join(save_dir, "*.tiff")))
     try:
+        # get_dem is resumable: it only fetches hash-named tiles missing from save_dir
         tiff_files = s3dep.get_dem(bbox=bbox, res=res, save_dir=save_dir)
-        num_tiles = len(tiff_files)
-        print(f"Downloaded {num_tiles} DEM tiles.")
+        num_downloaded = sum(1 for f in tiff_files if os.fspath(f) not in cached_before)
+        num_cached = len(tiff_files) - num_downloaded
+        if num_downloaded == 0:
+            print(f"All {len(tiff_files)} DEM tiles already cached — skipping download.")
+        else:
+            print(f"Downloaded {num_downloaded} DEM tiles ({num_cached} reused from cache).")
         return tiff_files
     except Exception as e:
         print(f"Error downloading DEM tiles: {e}")
@@ -220,28 +245,77 @@ def _remap_fdir_to_arcgis(fdir_nc: str) -> None:
         ds['fdir'][:] = out
 
 
-if __name__ == "__main__":
+def _delineate_and_mask_watershed(l0_dir: str, morph_dir: str,
+                                  buffer_m: float, domain_out: str) -> None:
+    """Delineate the true basin upstream of the max-facc outlet with overflow,
+    mask every L0 morphology grid to it, and write the buffered basin polygon.
 
-    # ---- USER INPUTS --------------------------------------------------
-    DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
-    RADIUS_CELLS       = 50        # radius for breaching (cells)
-    CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
-    DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
-    TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
-    MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")
-    # -------------------------------------------------------------------
+    Guarantees consistent dem/fdir masks: after masking, every basin cell drains
+    to the single outlet (whose flow-dir is set to 0 = mHM outlet), so no cell
+    routes into nodata. Required for Muskingum routing (processCase(8)=1).
+    """
+
+    fdir_l0 = os.path.join(l0_dir, "fdir_l0.tif")
+    facc_l0 = os.path.join(l0_dir, "facc_l0.tif")
+
+    with rasterio.open(facc_l0) as f:
+        facc = f.read(1)
+        transform = f.transform
+        crs = f.crs
+    orow, ocol = map(int, np.unravel_index(
+        int(np.argmax(np.where(np.isfinite(facc), facc, -1))), facc.shape))
+    ox, oy = rasterio.transform.xy(transform, orow, ocol)
+
+    # overflow labels basins from a pour-point vector file (uses fdir's 0-7 codes)
+    ws_tif = os.path.join(l0_dir, "watershed_l0.tif")
+    pour = os.path.join(l0_dir, "pour_point.gpkg")
+
+    gpd.GeoDataFrame({"id": [1]}, geometry=[Point(ox, oy)], crs=crs).to_file(pour, driver="GPKG")
+    overflow.label_watersheds_from_file(fdir_l0, pour, ws_tif, all_basins=False)
+
+    with rasterio.open(ws_tif) as w:
+        labels = w.read(1)
+    mask = labels == labels[orow, ocol]
+    area_km2 = int(mask.sum()) * (L0_CELL_SIZE_M ** 2) / 1e6
+    print(f"  Basin: {int(mask.sum())} cells ({area_km2:.0f} km2), outlet=(r{orow},c{ocol})")
+
+    # Mask each morphology grid to the basin; set the outlet flow-dir to 0 (outlet)
+    for var in ("dem", "slope", "aspect", "fdir", "facc"):
+        path = os.path.join(morph_dir, f"{var}.nc")
+        with nc4.Dataset(path, "r+") as ds:
+            fv = ds[var]._FillValue
+            arr = np.where(mask, np.array(ds[var][:]), fv)
+            if var == "fdir":
+                arr[orow, ocol] = 0
+            ds[var][:] = arr
+
+    # Write the buffered basin polygon as the domain boundary
+    geoms = [shape(g) for g, v in features.shapes(
+        mask.astype(np.uint8), mask=mask, transform=transform) if v == 1]
+    gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[unary_union(geoms)], crs=crs)
+    if buffer_m:
+        gdf["geometry"] = gdf.geometry.buffer(buffer_m)
+    os.makedirs(os.path.dirname(domain_out), exist_ok=True)
+    gdf.to_file(domain_out, driver="GeoJSON")
+    print(f"  Wrote basin boundary (+{buffer_m:.0f} m buffer): {domain_out}")
+
+def main():
+    """Run the DEM → mHM morphology preparation workflow."""
 
     # 1. Get DEM data within the model perimeter
     print("Getting DEM data within the model perimeter...")
     mosaic_file = os.path.join(DEM_DIR, "mosaic.tif")
     mosaic_clip_file = os.path.join(DEM_DIR, "mosaic_clipped.tif")
-    model_perimeter = gpd.read_file(DOMAIN_FILE)
+    model_perimeter = load_domain()  # domain polygon grown by DOMAIN_BUFFER_M
+
     if not os.path.exists(mosaic_clip_file):
-        tiles = get_dem_tiles(model_perimeter, res=DEM_CELL_SIZE_M, save_dir=TILES_DIR)
-        if len(tiles) == 0:
-            print("Failed: No DEM tiles were downloaded.")
-            sys.exit(1)
+        if os.path.exists(mosaic_file):
+            print(f"Reusing cached mosaic: {mosaic_file}")
         else:
+            tiles = get_dem_tiles(model_perimeter, res=DEM_CELL_SIZE_M, save_dir=TILES_DIR)
+            if len(tiles) == 0:
+                print("Failed: No DEM tiles were downloaded.")
+                sys.exit(1)
             print("Mosaicing DEM tiles")
             mosaic_tiles(tiles, mosaic_file)
 
@@ -325,3 +399,24 @@ if __name__ == "__main__":
     write_nc(f"{l0_dir}/fdir_l0.tif",   f"{MORPH_DIR}/fdir.nc",   dtype="int32",   var_name="fdir",   block_size=CHUNK_SIZE)
     write_nc(f"{l0_dir}/facc_l0.tif",   f"{MORPH_DIR}/facc.nc",   dtype="int32",   var_name="facc",   block_size=CHUNK_SIZE)
     _remap_fdir_to_arcgis(f"{MORPH_DIR}/fdir.nc")
+
+    # 6. Delineate the true basin (overflow) and mask morphology so dem/fdir masks
+    #    are consistent and every cell drains to the single outlet.
+    print("Delineating true basin boundary and masking morphology...")
+    _delineate_and_mask_watershed(
+        l0_dir, MORPH_DIR, DOMAIN_BUFFER_M,
+        os.path.join(WORKING_DIR, "input/domain/watershed.geojson"),
+    )
+
+if __name__ == "__main__":
+
+    # ---- USER INPUTS --------------------------------------------------
+    DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
+    RADIUS_CELLS       = 50        # radius for breaching (cells)
+    CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
+    DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
+    TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
+    MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")
+    # -------------------------------------------------------------------
+
+    main()

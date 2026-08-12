@@ -13,9 +13,14 @@ import rioxarray  # noqa: F401  # registers .rio accessor
 
 log = logging.getLogger(__name__)
 
-# State variables interpolate across time; accumulations must not be invented.
+# Precipitation is the only variable zero-filled for whole-missing timesteps
+# (no rain assumed). States and radiation fluxes are continuous physical
+# quantities that are never zero over a full step, so they are interpolated in
+# time instead — zero-filling radiation injects a spurious energy deficit that
+# drives Penman-Monteith net radiation negative and collapses PET.
 _STATE_VARS = ("tavg", "rhavg", "windspeed")
 _ACCUM_VARS = ("pre", "ssrd", "strd")
+_ZEROFILL_VARS = ("pre",)
 
 
 def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
@@ -23,8 +28,9 @@ def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
     """Fill nodata gaps so no sentinel survives inside the domain mask.
 
     Spatially fills edge/partial gaps per timestep from nearest valid neighbours,
-    then temporally fills whole-missing timesteps: states are interpolated in
-    time, accumulations (pre, ssrd, strd) are zero-filled to avoid inventing mass.
+    then temporally fills whole-missing timesteps: precipitation is zero-filled
+    (no rain assumed), while states and radiation fluxes (tavg, rhavg, windspeed,
+    ssrd, strd) are interpolated in time to avoid inventing an energy deficit.
     """
     da = da.where(da != nodata).load()
 
@@ -40,11 +46,11 @@ def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
         filled = filled.rio.write_nodata(np.nan).rio.interpolate_na(method="nearest")
 
         n_after_spatial = int(np.isnan(filled).sum())
-        if var in _STATE_VARS:
+        if var in _ZEROFILL_VARS:
+            filled = filled.fillna(0.0)
+        else:
             filled = (filled.interpolate_na(dim="time", method="linear")
                             .ffill("time").bfill("time"))
-        else:
-            filled = filled.fillna(0.0)
 
         residual = int(np.isnan(filled).sum())
         log.info("gap-fill %s: filled %d cells (spatial) + %d cells across %d "

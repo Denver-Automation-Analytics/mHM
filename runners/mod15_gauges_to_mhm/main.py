@@ -27,7 +27,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import OUTPUT_CRS, START_DATE, END_DATE, DOMAIN_FILE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
+from config import OUTPUT_CRS, START_DATE, END_DATE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
 
 import geopandas as gpd
 
@@ -36,32 +36,6 @@ from mhm_format   import to_m3s, filter_by_qualifiers, write_gauge_file
 from idgauges     import build_idgauges_grid, write_id_map
 from writers      import write_nc
 from utils        import load_header_from_nc, write_header_txt, read_projection_wkt
-
-# Load env from repo root explicitly so runs from any CWD behave the same.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
-
-# ---- OUTPUTS ---------------------------------------------------
-OUTPUT_DIR            = os.path.join(WORKING_DIR, "input", "gauge")
-
-# --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
-L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
-TARGET_CRS_WKT        = OUTPUT_CRS
-LATLON_NC_PATH        = os.path.join(WORKING_DIR, "input", "latlon", "latlon.nc")
-
-# --- Retrieval knobs -----------------------------------------------
-SITE_TYPE_CODE        = "ST"       # Stream sites
-PARAMETER_CODE        = "00060"    # Discharge, m^3/s
-MIN_RECORD_YEARS      = 1          # skip gauges with valid record shorter than this
-# Recent event data is provisional until USGS Director review, so keep it.
-QUALIFIER_POLICY      = "keep_all"   # or "keep_approved_only" or "keep_approved_provisional"
-CHUNK_YEARS           = 1          # break continuous requests into 1-yr chunks
-MAX_WORKERS           = 4          # parallel per-gauge network calls
-
-# --- Constants -----------------------------------------------------
-MAX_GAP_HOURS         = None       # None -> interpolate all gaps; int to cap gap size
-LOG_LEVEL             = logging.INFO
-
 
 # --------------------------------------------------------------------
 def main() -> None:
@@ -84,7 +58,12 @@ def main() -> None:
              l0_header["nrows"], l0_header["cellsize"])
 
     # 2. Discover gauges strictly inside the watershed polygon.
-    model_perimeter = gpd.read_file(DOMAIN_FILE).to_crs("EPSG:4326")
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    if not os.path.exists(WATERSHED_FILE):
+        raise FileNotFoundError(
+            f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
+        )
+    model_perimeter = gpd.read_file(WATERSHED_FILE).to_crs("EPSG:4326")
     gauges_in = get_usgs_stations(
         model_perimeter=model_perimeter,
         variable_type="flow",
@@ -94,9 +73,9 @@ def main() -> None:
     if gauges_in.empty:
         log.warning(
             "No USGS streamflow gauges found strictly inside %s. "
-            "Nothing to write.", DOMAIN_FILE,
+            "Nothing to write.", WATERSHED_FILE,
         )
-        print(f"[hydro] No gauges found inside {DOMAIN_FILE}. Exiting.")
+        print(f"[hydro] No gauges found inside {WATERSHED_FILE}. Exiting.")
         sys.exit(0)
 
     log.info("%d gauge(s) strictly inside watershed.", len(gauges_in))
@@ -162,8 +141,10 @@ def main() -> None:
         print("[hydro] No gauges survived QC. Exiting.")
         sys.exit(0)
 
-    # 5.1 Filter out gauges that are undersirable as specified by the user in config.py
-    survivors = [g for g in survivors if g["site_no"] in WANTED_GAUGE_IDS]
+    if len(WANTED_GAUGE_IDS) > 0:
+        log.info("Filtering to %d user-specified gauge(s).", len(WANTED_GAUGE_IDS))
+        # 5.1 Filter out gauges that are undersirable as specified by the user in config.py
+        survivors = [g for g in survivors if g["site_no"] in WANTED_GAUGE_IDS]
 
     # 5.2 Assign sequential local IDs and write per-gauge files.
     for local_id, g in enumerate(survivors, start=1):
@@ -196,4 +177,26 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+
+    # Load env from repo root explicitly so runs from any CWD behave the same.
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
+    # ---- OUTPUTS ---------------------------------------------------
+    OUTPUT_DIR            = os.path.join(WORKING_DIR, "input", "gauge")
+    # --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
+    L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+    TARGET_CRS_WKT        = OUTPUT_CRS
+    LATLON_NC_PATH        = os.path.join(WORKING_DIR, "input", "latlon", "latlon.nc")
+    # --- Retrieval knobs -----------------------------------------------
+    SITE_TYPE_CODE        = "ST"       # Stream sites
+    PARAMETER_CODE        = "00060"    # Discharge, m^3/s
+    MIN_RECORD_YEARS      = 1          # skip gauges with valid record shorter than this
+    # Recent event data is provisional until USGS Director review, so keep it.
+    QUALIFIER_POLICY      = "keep_all"   # or "keep_approved_only" or "keep_approved_provisional"
+    CHUNK_YEARS           = 1          # break continuous requests into 1-yr chunks
+    MAX_WORKERS           = 4          # parallel per-gauge network calls
+    # --- Constants -----------------------------------------------------
+    MAX_GAP_HOURS         = None       # None -> interpolate all gaps; int to cap gap size
+    LOG_LEVEL             = logging.INFO
+
     main()

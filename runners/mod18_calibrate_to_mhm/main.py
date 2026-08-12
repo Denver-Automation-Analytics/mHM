@@ -23,7 +23,7 @@ import subprocess
 import sys
 from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WORKING_DIR
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -35,14 +35,33 @@ from nml_writer import write_mhm_nml
 MHM_BINARY       = "/workspace/build/mhm"
 
 OPTI_METHOD      = 1     # 1=DDS, 2=Simulated Annealing, 3=SCE
-OPTI_FUNCTION    = 1     # 1=1-NSE(Q); see mhm.nml comments for full list
+# Objective function -> mHM opti_function from config.OPTI_OBJECTIVE.
+OPTI_FUNCTION = {
+    "nse":       1,   # 1 - NSE(Q)
+    "lnnse":     2,   # 1 - lnNSE(Q); emphasises low flows
+    "nse_lnnse": 3,   # 1 - 0.5*(NSE + lnNSE)
+    "kge":       9,   # 1 - KGE(Q)
+    "multi_kge": 14,  # power-6 combination of per-gauge KGE
+}.get(OPTI_OBJECTIVE)
+if OPTI_FUNCTION is None:
+    raise ValueError(
+        f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
+        "'nse', 'lnnse', 'nse_lnnse', 'kge', or 'multi_kge'.")
 N_ITERATIONS     = 10
-WARMING_DAYS     = 0     # spin-up days before eval period; increase for multi-year meteo
+WARMING_DAYS     = WARMUP_DAYS  # spin-up days before eval period (from config.py)
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
 if MODEL_TIMESTEP_H is None:
     raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
+# mRM routing scheme -> mHM processCase(8) from config.ROUTING_METHOD.
+ROUTING_CASE = {"muskingum": 1, "adaptive": 2, "adaptive_varying": 3}.get(ROUTING_METHOD)
+if ROUTING_CASE is None:
+    raise ValueError(
+        f"Unexpected ROUTING_METHOD {ROUTING_METHOD!r}. "
+        "Must be 'muskingum', 'adaptive', or 'adaptive_varying'.")
 SNAP_RADIUS_CELLS = 2    # gauge stream-snap search radius in L0 cells (±)
+# Minimum flow accumulation (in L0 cells) for a snapped gauge to count as on-channel.
+MIN_CHANNEL_FACC_CELLS = 50
 
 REPO_PARAM_NML   = "/workspace/mhm_parameter.nml"
 REPO_OUTPUT_NML  = "/workspace/mhm_outputs.nml"
@@ -73,19 +92,12 @@ log = logging.getLogger("calibrate_to_mhm")
 # Geology placeholder bootstrap
 # ---------------------------------------------------------------------------
 
+# Single formation: the bootstrap map only ever assigns class 1, so extra
+# GeoParam entries would be dead parameters that DDS needlessly optimizes.
 _GEO_CLASSDEF = """\
-nGeo_Formations  10
+nGeo_Formations  1
 GeoParam(i)   ClassUnit     Karstic      Description
          1                1           0      GeoUnit-1
-         2            2           0      GeoUnit-2
-         3            3           0      GeoUnit-3
-         4            4           0      GeoUnit-4
-         5            5           0      GeoUnit-5
-         6            6           0      GeoUnit-6
-         7            7           0      GeoUnit-7
-         8            8           0      GeoUnit-8
-         9            9           0      GeoUnit-9
-        10               10           0      GeoUnit-10
 !<-END
 """
 
@@ -233,7 +245,8 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     Reads gauge lat/lon from id_map.csv, projects to LCC, snaps each gauge to
     the highest-facc valid cell within SNAP_RADIUS_CELLS of the nearest cell
     (so gauges land on the channel), and writes morph/idgauges.asc.
-    Skips the operation if the file already exists with the correct grid.
+    Always rebuilds (a stale file silently corrupts calibration), and validates
+    that every gauge snapped onto a channel before writing.
     """
     import csv
     import netCDF4 as nc4_mod
@@ -255,13 +268,8 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
         facc_vals = np.array(ds.variables["facc"][:])
         facc_fill = int(ds.variables["facc"]._FillValue)
 
-    # Check if file already matches
-    if dst.exists():
-        hdr = _ascii_header(dst)
-        if int(hdr["ncols"]) == ncols and int(hdr["nrows"]) == nrows:
-            return
-
-    log.info("Building morph/idgauges.asc at L0 grid …")
+    # Always rebuild: a stale idgauges.asc silently corrupts the calibration.
+    log.info("Building morph/idgauges.asc at L0 grid (forced rebuild) …")
 
     # Transform gauges from WGS84 (lon, lat) → LCC (x, y)
     tf = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
@@ -272,6 +280,9 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     facc_stream = np.where(valid & (facc_vals != facc_fill), facc_vals, -1)
 
     grid = np.full((nrows, ncols), -9999, dtype=np.int32)
+
+    # Per-gauge snap record: gid -> (row, col, facc_before, facc_after) or None.
+    placements: dict[int, tuple[int, int, int, int] | None] = {}
 
     id_map_path = gauge_dir / "id_map.csv"
     with open(id_map_path, newline="") as fh:
@@ -303,12 +314,48 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
                              gid, ri, ci, sri, sci,
                              int(facc_stream[ri, ci]), int(facc_stream[sri, sci]))
                 grid[sri, sci] = gid
+                placements[gid] = (sri, sci, int(facc_stream[ri, ci]),
+                                   int(facc_stream[sri, sci]))
             elif valid[ri, ci]:
                 grid[ri, ci] = gid
+                placements[gid] = (ri, ci, int(facc_stream[ri, ci]),
+                                   int(facc_stream[ri, ci]))
+            else:
+                placements[gid] = None
 
     xres = float(x_l0[1] - x_l0[0])
     xll  = float(x_l0[0])  - xres / 2
     yll  = float(y_l0[-1]) - xres / 2
+
+    # Validate gauge snapping before writing so a bad file never lands on disk.
+    cell_km2 = (xres * xres) / 1e6
+    problems: list[str] = []
+    log.info("Gauge snapping report (cell area %.4f km²):", cell_km2)
+    for gid in sorted(placements):
+        info = placements[gid]
+        if info is None:
+            log.warning("  gauge %d: NOT PLACED (projected outside valid domain)", gid)
+            problems.append(f"gauge {gid}: not placed (outside valid domain)")
+            continue
+        sri, sci, f0, f1 = info
+        area = f1 * cell_km2
+        flag = "OK" if f1 >= MIN_CHANNEL_FACC_CELLS else "OFF-CHANNEL"
+        log.info("  gauge %d: (%d,%d) facc %d→%d  area %.1f km²  [%s]",
+                 gid, sri, sci, f0, f1, area, flag)
+        if f1 < MIN_CHANNEL_FACC_CELLS:
+            problems.append(
+                f"gauge {gid}: snapped facc {f1} cells (< {MIN_CHANNEL_FACC_CELLS}); "
+                f"area {area:.1f} km² looks off-channel")
+
+    placed_cells = [(v[0], v[1]) for v in placements.values() if v is not None]
+    if len(set(placed_cells)) != len(placed_cells):
+        problems.append("two gauges share the same cell (collision)")
+    if problems:
+        raise ValueError(
+            "idgauges.asc gauge-snapping validation failed:\n  "
+            + "\n  ".join(problems))
+    log.info("All %d gauges snapped onto channels (facc ≥ %d cells).",
+             len(placements), MIN_CHANNEL_FACC_CELLS)
 
     with open(dst, "w") as fh:
         fh.write(f"ncols         {ncols}\n")
@@ -498,6 +545,7 @@ def main() -> None:
         timestep             = MODEL_TIMESTEP_H,
         opti_method          = OPTI_METHOD,
         opti_function        = OPTI_FUNCTION,
+        routing_case         = ROUTING_CASE,
         n_iterations         = N_ITERATIONS,
         warming_days         = WARMING_DAYS,
         eval_start           = eval_start,

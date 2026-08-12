@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -47,6 +47,7 @@ def write_mhm_nml(
     timestep: int,
     opti_method: int,
     opti_function: int,
+    routing_case: int,
     n_iterations: int,
     warming_days: int,
     eval_start: date,
@@ -169,14 +170,14 @@ def write_mhm_nml(
   processCase(5)  = 0
   processCase(6)  = 1
   processCase(7)  = 1
-  processCase(8)  = 3
+  processCase(8)  = {routing_case}
   processCase(9)  = 1
   processCase(10) = 0
   processCase(11) = 0
 /
 
 &LCover
-{_lcover_block(lcover_scenes, eval_start.year, eval_end.year)}
+{_lcover_block(lcover_scenes, (eval_start - timedelta(days=warming_days)).year, eval_end.year)}
 /
 
 &time_periods

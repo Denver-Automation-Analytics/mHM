@@ -396,4 +396,8 @@ def interpolate_gaps(
     out.loc[mask, "value"] = np.nan
     out["value"] = out["value"].interpolate(method="time", limit=max_gap_hours)
     out["value"] = out["value"].fillna(nodata)
+    # find the min flow above 0
+    min_flow = out.loc[out["value"] > 0, "value"].min()
+    # replace all zeros with the min flow above 0
+    out.loc[out["value"] == 0, "value"] = min_flow 
     return out

@@ -131,7 +131,9 @@ def aggregate_to_daily(ds_mhm: xr.Dataset, nodata: float) -> xr.Dataset:
     if other:
         raise KeyError(f"No daily reducer defined for variable(s) {sorted(other)}.")
 
-    daily_sum  = ds_valid[sum_vars].resample(time="1D").sum(skipna=True)
+    # min_count=1 so a fully-missing day sums to NaN (not 0), letting the
+    # downstream temporal gap-fill interpolate it instead of leaving a spurious 0.
+    daily_sum  = ds_valid[sum_vars].resample(time="1D").sum(skipna=True, min_count=1)
     daily_mean = ds_valid[mean_vars].resample(time="1D").mean(skipna=True)
     ds_daily = xr.merge([daily_sum, daily_mean])
 

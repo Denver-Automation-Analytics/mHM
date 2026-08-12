@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
+from config import L0_CELL_SIZE_M, OUTPUT_CRS, WORKING_DIR, NODATA
 from pathlib import Path
 from dotenv import load_dotenv
 from pyproj import CRS as ProjCRS
@@ -28,7 +28,7 @@ from reclassify   import to_mhm_classes, log_class_stats
 from regrid       import clip_and_reproject_to_grid
 from writers      import write_asc, write_nc_copy
 from utils        import (
-    build_l0_header_from_watershed,
+    load_header_from_nc,
     write_header_txt,
 )
 
@@ -91,8 +91,22 @@ def main() -> None:
     out_root = Path(OUTPUT_DIR)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    # 1. Build the L0 grid directly from the watershed boundary.
-    l0_header = build_l0_header_from_watershed(DOMAIN_FILE, L0_CELL_SIZE_M, OUTPUT_CRS)
+    # 1. Load the canonical L0 grid produced by the DEM runner (mod10).
+    #    All L0 inputs must share this exact grid; deriving it independently
+    #    from the watershed bbox produces a misaligned (inset) grid.
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "input", "domain", "watershed.geojson")
+    if not os.path.exists(WATERSHED_FILE):
+        raise FileNotFoundError(
+            f"Watershed file not found: {WATERSHED_FILE}. "
+            "Run runners/mod10_dem_to_mhm first."
+        )
+    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+    if not os.path.exists(L0_MORPH_NC_PATH):
+        raise FileNotFoundError(
+            f"Canonical L0 morph grid not found: {L0_MORPH_NC_PATH}. "
+            "Run runners/mod10_dem_to_mhm first."
+        )
+    l0_header = load_header_from_nc(L0_MORPH_NC_PATH)
     log.info("L0 cellsize=%s m, ncols=%d, nrows=%d",
              l0_header["cellsize"], l0_header["ncols"], l0_header["nrows"])
 
@@ -115,7 +129,7 @@ def main() -> None:
         # Clip + reproject to L0 with majority (mode) resampling.
         lc_l0 = clip_and_reproject_to_grid(
             scene,
-            watershed_path=DOMAIN_FILE,
+            watershed_path=WATERSHED_FILE,
             target_crs_wkt=target_crs,
             header=l0_header,
             src_nodata=NODATA_SRC,

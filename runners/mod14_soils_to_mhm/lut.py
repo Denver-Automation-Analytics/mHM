@@ -33,6 +33,33 @@ _LAYER_DEPTHS: list[tuple[int, int]] = [
 # Default fallback soil type appended as the last entry (fills masked cells)
 _DEFAULT = {"cl": 33, "sn": 33, "bd_gcm3": 1.5}
 
+# Quantisation bin sizes for soil-type dedup (aggressive: ~20k types).
+# clay/sand in %, bulk density in mg/cm³ (200 = 0.2 g/cm³).
+_CLSN_BIN_PCT = 20
+_BD_BIN_MGCM3 = 200
+
+
+def _quantise_profiles(keys: np.ndarray) -> np.ndarray:
+    """
+    Bin clay/sand (%) and bulk density (mg/cm³) so near-identical soil columns
+    map to one type. Clay and sand are clamped to keep clay + sand ≤ 100 %
+    (silt ≥ 0) per horizon after rounding.
+    """
+    q = keys.astype(np.int32).copy()
+    cl_idx = np.arange(0, 18, 3)
+    sn_idx = np.arange(1, 18, 3)
+    bd_idx = np.arange(2, 18, 3)
+
+    cl_q = np.clip(np.round(q[:, cl_idx] / _CLSN_BIN_PCT) * _CLSN_BIN_PCT, 0, 100)
+    sn_q = np.round(q[:, sn_idx] / _CLSN_BIN_PCT) * _CLSN_BIN_PCT
+    sn_q = np.clip(sn_q, 0, 100 - cl_q)
+    bd_q = np.round(q[:, bd_idx] / _BD_BIN_MGCM3) * _BD_BIN_MGCM3
+
+    q[:, cl_idx] = cl_q
+    q[:, sn_idx] = sn_q
+    q[:, bd_idx] = bd_q
+    return q
+
 
 def build_lut(
     layers: dict[str, dict[int, np.ndarray]],
@@ -56,25 +83,38 @@ def build_lut(
         layers["sn"][k] = np.where(layers["sn"][k] == 0, _DEFAULT["sn"], layers["sn"][k])
 
     nrows, ncols = header["nrows"], header["ncols"]
-    # Valid cells: sand layer-1 has a real value (nodata = -9999 < 0)
-    valid = layers["sn"][1] >= 0
+    # Valid cells require every property in every horizon (no nodata leaks into
+    # a soil type; cells missing any layer fall back to the default type).
+    valid = np.ones((nrows, ncols), dtype=bool)
+    for prop in ("cl", "sn", "bd"):
+        for k in range(1, 7):
+            valid &= layers[prop][k] >= 0
+
+    # Stack the 18 per-cell values (cl, sn, bd x 6 horizons) into a profile key,
+    # then quantise so near-identical columns collapse to one soil type. Without
+    # binning, continuous SoilGrids texture yields ~one type per cell.
+    profile = np.stack(
+        [layers[prop][k] for k in range(1, 7) for prop in ("cl", "sn", "bd")],
+        axis=-1,
+    ).astype(np.int32)
+    keys = _quantise_profiles(profile[valid])
 
     soil_id = np.full((nrows, ncols), nodata, dtype=np.int32)
     lut_rows: list[tuple] = []
-    soil_count = 0
 
-    # Column-major iteration matches the Fortran loop order
-    for col in range(ncols):
-        for row in range(nrows):
-            if not valid[row, col]:
-                continue
-            soil_count += 1
-            soil_id[row, col] = soil_count
+    if keys.size:
+        uniq, inverse = np.unique(keys, axis=0, return_inverse=True)
+        soil_id[valid] = np.ravel(inverse).astype(np.int32) + 1
+        for uid, prof in enumerate(uniq, start=1):
             for layer_idx, (ud, ld) in enumerate(_LAYER_DEPTHS, start=1):
-                cl = int(layers["cl"][layer_idx][row, col])
-                sn = int(layers["sn"][layer_idx][row, col])
-                bd = int(layers["bd"][layer_idx][row, col]) / 1000.0
-                lut_rows.append((soil_count, layer_idx, ud, ld, cl, sn, bd))
+                base = (layer_idx - 1) * 3
+                cl = int(prof[base])
+                sn = int(prof[base + 1])
+                bd = int(prof[base + 2]) / 1000.0
+                lut_rows.append((uid, layer_idx, ud, ld, cl, sn, bd))
+        soil_count = int(uniq.shape[0])
+    else:
+        soil_count = 0
 
     # Append the default fallback type; masked cells in soil_id point to it
     default_id = soil_count + 1

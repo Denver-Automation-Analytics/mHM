@@ -103,17 +103,25 @@ def _process_tile(
 # ----------------------------- Core function ----------------------------------
 
 
-def mosaic_tiles(subfolder_path: str, output_path: str) -> None:
-    """Mosaic all .tif files in *tiles* into a single COG at *output_path*."""
+def mosaic_tiles(tiles, output_path: str) -> None:
+    """Mosaic all .tif files in *tiles* into a single COG at *output_path*.
+
+    *tiles* may be a directory to search recursively or an iterable of tile paths.
+    """
+
+    if isinstance(tiles, (str, os.PathLike)):
+        candidates = glob.glob(os.path.join(os.fspath(tiles), "**", "*"), recursive=True)
+    else:
+        candidates = [os.fspath(t) for t in tiles]
 
     tif_files = sorted(
         f
-        for f in glob.glob(os.path.join(subfolder_path, "**", "*"), recursive=True)
+        for f in candidates
         if not f.lower().endswith(".aux.xml") and _is_tiff(f)
     )
 
     if not tif_files:
-        log.warning("No .tif files found in %s — skipping.", subfolder_path)
+        log.warning("No .tif files found in %s — skipping.", tiles)
         return
 
     log.info("  Tiles found : %d", len(tif_files))

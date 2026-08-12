@@ -6,24 +6,16 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from affine import Affine
-from rasterio.crs import CRS
-from rasterio.enums import Resampling
-from rasterio.warp import reproject as _rio_reproject
+from pyproj import Transformer
 
 log = logging.getLogger(__name__)
 
 # SoilGrids INT16 nodata sentinel (used when metadata nodata is absent)
 _SG_NODATA = -32768
 
-
-def _affine_from_header(header: dict) -> Affine:
-    """Build a north-up affine transform from an mHM-style header dict."""
-    cs = header["cellsize"]
-    return Affine(
-        cs, 0.0, header["xllcorner"],
-        0.0, -cs, header["yllcorner"] + header["nrows"] * cs,
-    )
+# SoilGrids native CRS; the WCS-written tifs carry no PROJ-parseable CRS, so
+# assign this when src.crs is None to keep the tif geotransform georeferenced.
+_IGH_PROJ4 = "+proj=igh +datum=WGS84 +no_defs"
 
 
 def reproject_to_header(
@@ -37,26 +29,48 @@ def reproject_to_header(
 
     Uses nearest-neighbour resampling to preserve raw INT16 integer values.
     Returns an (nrows, ncols) int32 array; nodata pixels are nodata_out.
+
+    Resampling is done manually via pyproj because GDAL's warp cannot invert
+    the interrupted Goode homolosine (+proj=igh) source projection.
     """
-    dst_transform = _affine_from_header(header)
-    dst_crs = CRS.from_user_input(target_crs)
-    dst_shape = (header["nrows"], header["ncols"])
-    dst = np.full(dst_shape, nodata_out, dtype=np.int32)
+    ncols, nrows = header["ncols"], header["nrows"]
+    cs = header["cellsize"]
+    xll, yll = header["xllcorner"], header["yllcorner"]
+    top = yll + nrows * cs
+
+    # Destination cell-centre coordinates in the target CRS.
+    xs = xll + (np.arange(ncols) + 0.5) * cs
+    ys = top - (np.arange(nrows) + 0.5) * cs
+    dst_x, dst_y = np.meshgrid(xs, ys)
+
+    dst = np.full((nrows, ncols), nodata_out, dtype=np.int32)
 
     with rasterio.open(src_path) as src:
         src_nodata = src.nodata if src.nodata is not None else _SG_NODATA
-        _rio_reproject(
-            source=rasterio.band(src, 1),
-            destination=dst,
-            src_crs=src.crs,
-            src_transform=src.transform,
-            src_nodata=src_nodata,
-            dst_crs=dst_crs,
-            dst_transform=dst_transform,
-            resampling=Resampling.nearest,
-            dst_nodata=nodata_out,
-        )
+        src_crs = src.crs.to_wkt() if src.crs is not None else _IGH_PROJ4
+        arr = src.read(1)
+        inv = ~src.transform  # world -> pixel
 
-    valid = np.sum(dst != nodata_out)
+        tf = Transformer.from_crs(target_crs, src_crs, always_xy=True)
+        sx, sy = tf.transform(dst_x.ravel(), dst_y.ravel())
+        sx = sx.reshape(nrows, ncols)
+        sy = sy.reshape(nrows, ncols)
+
+        col = inv.a * sx + inv.b * sy + inv.c
+        row = inv.d * sx + inv.e * sy + inv.f
+        ci = np.floor(col).astype(np.int64)
+        ri = np.floor(row).astype(np.int64)
+
+        h, w = arr.shape
+        ok = (
+            (ci >= 0) & (ci < w) & (ri >= 0) & (ri < h)
+            & np.isfinite(sx) & np.isfinite(sy)
+        )
+        vals = arr[ri[ok], ci[ok]]
+        good = vals != src_nodata
+        rr, cc = np.nonzero(ok)
+        dst[rr[good], cc[good]] = vals[good].astype(np.int32)
+
+    valid = int(np.sum(dst != nodata_out))
     log.debug("%s -> %d valid pixels / %d total", src_path.name, valid, dst.size)
     return dst
