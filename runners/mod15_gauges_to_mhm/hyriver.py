@@ -399,5 +399,7 @@ def interpolate_gaps(
     # find the min flow above 0
     min_flow = out.loc[out["value"] > 0, "value"].min()
     # replace all zeros with the min flow above 0
-    out.loc[out["value"] == 0, "value"] = min_flow 
+    out.loc[out["value"] == 0, "value"] = min_flow
+    # add artificial baseflow of 1 m3/s to all values
+    out["value"] = out["value"] + 1
     return out

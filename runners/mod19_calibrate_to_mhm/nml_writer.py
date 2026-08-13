@@ -49,6 +49,7 @@ def write_mhm_nml(
     opti_function: int,
     routing_case: int,
     n_iterations: int,
+    seed: int,
     warming_days: int,
     eval_start: date,
     eval_end: date,
@@ -237,7 +238,7 @@ def write_mhm_nml(
 
 &Optimization
   nIterations = {n_iterations}
-  seed        = -9
+  seed        = {seed}
   dds_r       = 0.2
   sa_temp     = -9.0
   sce_ngs     = 2

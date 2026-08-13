@@ -91,50 +91,52 @@ def main() -> None:
     for _, row in gauges_in.iterrows():
         site_no = row["site_no"]
         name    = row.get("station_nm", row.get("name", str(site_no)))
-        raw = get_nwis(
-            site       = site_no,
-            parameter  = "Flow",
-            frequency  = frequency,
-            start_date = START_DATE,
-            end_date   = END_DATE,
-        )
-        if raw is None:
-            log.warning("Skipping %s (%s): fetch returned None.", site_no, name)
-            continue
 
-        if TIMESTEP == "hourly":
-            prep_df = prep_hourly(raw)
-            if prep_df.empty:
-                log.warning("Skipping %s (%s): no data after hourly aggregation.", site_no, name)
+        if len(WANTED_GAUGE_IDS) > 0:
+            log.info("Filtering to %d user-specified gauge(s).", len(WANTED_GAUGE_IDS))
+
+            if site_no not in WANTED_GAUGE_IDS:
+                log.info("Skipping %s (%s): not in user-specified list.", site_no, name)
                 continue
-        elif TIMESTEP == "daily":
-            prep_df = prep_daily(raw)
-            if prep_df.empty:
-                log.warning("Skipping %s (%s): no data after daily aggregation.", site_no, name)
+   
+            raw = get_nwis(
+                site       = site_no,
+                parameter  = "Flow",
+                frequency  = frequency,
+                start_date = START_DATE,
+                end_date   = END_DATE,
+            )
+            if raw is None:
+                log.warning("Skipping %s (%s): fetch returned None.", site_no, name)
                 continue
 
-        clean = filter_by_qualifiers(prep_df, policy=QUALIFIER_POLICY, nodata=NODATA)
-        clean = to_m3s(clean, nodata=NODATA)
-        clean = interpolate_gaps(clean, nodata=NODATA, max_gap_hours=MAX_GAP_HOURS)
+            if TIMESTEP == "hourly":
+                prep_df = prep_hourly(raw)
+                if prep_df.empty:
+                    log.warning("Skipping %s (%s): no data after hourly aggregation.", site_no, name)
+                    continue
+            elif TIMESTEP == "daily":
+                prep_df = prep_daily(raw)
+                if prep_df.empty:
+                    log.warning("Skipping %s (%s): no data after daily aggregation.", site_no, name)
+                    continue
 
-        valid = clean.loc[clean["value"] != NODATA]
-        if valid.empty:
-            log.warning("Skipping %s (%s): no valid values after QC.", site_no, name)
-            continue
+            clean = filter_by_qualifiers(prep_df, policy=QUALIFIER_POLICY, nodata=NODATA)
+            clean = to_m3s(clean, nodata=NODATA)
+            clean = interpolate_gaps(clean, nodata=NODATA, max_gap_hours=MAX_GAP_HOURS)
 
-        # span_yrs = (valid.index.max() - valid.index.min()).days / 365.25
-        # if span_yrs < MIN_RECORD_YEARS:
-        #     log.warning("Skipping %s (%s): record span %.2f yr < %d yr threshold.",
-        #                 site_no, name, span_yrs, MIN_RECORD_YEARS)
-        #     continue
+            valid = clean.loc[clean["value"] != NODATA]
+            if valid.empty:
+                log.warning("Skipping %s (%s): no valid values after QC.", site_no, name)
+                continue
 
-        survivors.append({
-            "site_no": site_no,
-            "name":    name,
-            "lat":     float(row["dec_lat_va"]),
-            "lon":     float(row["dec_long_va"]),
-            "series":  clean,
-        })
+            survivors.append({
+                "site_no": site_no,
+                "name":    name,
+                "lat":     float(row["dec_lat_va"]),
+                "lon":     float(row["dec_long_va"]),
+                "series":  clean,
+            })
 
     if not survivors:
         log.warning("All discovered gauges failed retrieval or QC. Nothing to write.")

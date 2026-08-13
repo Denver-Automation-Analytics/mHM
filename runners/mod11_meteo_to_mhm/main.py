@@ -13,6 +13,7 @@ Output cadence follows config.TIMESTEP: "hourly" writes the native HRRR steps,
 
 from __future__ import annotations
 import os
+import gc
 import sys
 import shutil
 import logging
@@ -155,6 +156,17 @@ def process_window(ds_window, batch_id, *, hrrr_crs, bbox_lcc, l2,
 
     log.info("Batch %04d: %d %s timesteps → temp files",
              batch_id, ds_mhm.sizes["time"], TIMESTEP)
+
+    # Release this batch's materialized arrays before the next iteration.
+    # rioxarray/GDAL buffers are not reclaimed promptly by refcounting alone,
+    # so drop the references and force a collection to keep RAM flat over a
+    # long (e.g. 10-year) run instead of growing until the OS OOM-kills us.
+    ds_clip.close()
+    ds_reproj.close()
+    pre_sum.close()
+    ds_mhm.close()
+    del ds_clip, ds_reproj, pre_sum, ds_mhm
+    gc.collect()
     return eff_ref
 
 
@@ -254,20 +266,27 @@ def main() -> None:
     #    batches whose temp files are still missing.
     ref_time = _recover_ref_time(temp_dirs) if RESUME else None
     windows_by_id = dict(windows)
+    # Drop the list so each monthly slice is held by exactly one container; we
+    # pop from windows_by_id below so processed slices (and their dask graphs)
+    # are freed as we go rather than pinned for the whole run.
+    del windows
     batch_vars = {}  # batch_id -> vars that still need this batch written
     for var in (v for v in OUT_VARS if status[v] == "generate"):
         for bid in missing_by_var[var]:
             batch_vars.setdefault(bid, set()).add(var)
 
     for batch_id in sorted(batch_vars):
+        window = windows_by_id.pop(batch_id)
         ref_time = process_window(
-            windows_by_id[batch_id], batch_id,
+            window, batch_id,
             hrrr_crs=hrrr_crs, bbox_lcc=bbox_lcc, l2=l2,
             target_transform=target_transform, header=header,
             init_time=init_time, nodata=NODATA, ref_time=ref_time,
             temp_dirs=temp_dirs, temp_files=temp_files, log=log,
             vars_to_write=batch_vars[batch_id],
         )
+        del window
+        gc.collect()
 
     if ref_time is None:
         raise RuntimeError(
@@ -289,6 +308,9 @@ def main() -> None:
             write_header_txt(header, meteo_out_root / sub / "header.txt")
         finally:
             shutil.rmtree(tdir, ignore_errors=True)
+            # finalize_variable loads a full multi-year series and makes several
+            # copies while gap-filling; release them before the next variable.
+            gc.collect()
 
     # 8. Write the shared latlon header.
     write_header_txt(header, latlon_out_root / "header.txt")

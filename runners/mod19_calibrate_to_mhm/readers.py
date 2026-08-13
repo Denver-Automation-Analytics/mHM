@@ -123,27 +123,44 @@ def read_soil_info(soil_classdefinition_txt: Path, default_horizons: int = 2) ->
 def derive_eval_period(
     first_meteo: date,
     last_meteo: date,
-    warming_days: int,
+    eval_start_date: date,
+    warmup_days: int,
     obs_start: date | None = None,
     obs_end: date | None = None,
-) -> Tuple[date, date]:
+) -> Tuple[date, date, int]:
     """
-    Return (eval_start, eval_end) as the meteo period (after warming days)
-    intersected with the gauge observation window (obs_start, obs_end).
+    Return (eval_start, eval_end, warming_days).
 
-    Raises ValueError if the resulting period is empty.
+    The evaluation (scoring) window is pinned to *eval_start_date* .. last_meteo,
+    intersected with the gauge observation window and the forcing coverage. It is
+    deliberately independent of warm-up length so that changing the warm-up does
+    NOT move the scored period (making warm-up experiments comparable).
+
+    Warm-up is spin-up forcing drawn from the interval that PRECEDES the eval
+    window; its length is *warmup_days* capped by the forcing available before
+    eval_start (mHM slices the forcing file to the simulation period, so a file
+    that starts earlier than the eval window is fine).
+
+    Raises ValueError if the resulting evaluation period is empty.
     """
-    eval_start = first_meteo + timedelta(days=warming_days)
-    eval_end   = last_meteo
-    if obs_start is not None:
-        eval_start = max(eval_start, obs_start)
+    eval_end = last_meteo
     if obs_end is not None:
         eval_end = min(eval_end, obs_end)
+
+    eval_start = max(eval_start_date, first_meteo)
+    if obs_start is not None:
+        eval_start = max(eval_start, obs_start)
+
     if eval_start > eval_end:
         raise ValueError(
-            f"Empty evaluation period: meteo {first_meteo}–{last_meteo} "
-            f"(warming_days={warming_days}) does not overlap gauge window "
-            f"{obs_start}–{obs_end}. Align config START_DATE/END_DATE with the "
-            f"meteo forcing or reduce WARMING_DAYS."
+            f"Empty evaluation period: eval_start {eval_start} > eval_end "
+            f"{eval_end}. meteo {first_meteo}–{last_meteo}, gauge window "
+            f"{obs_start}–{obs_end}. Align config EVAL_START_DATE/END_DATE with "
+            f"the forcing and gauge coverage."
         )
-    return eval_start, eval_end
+
+    # Spin-up can only use forcing that exists before the (fixed) eval window.
+    available_leadin = (eval_start - first_meteo).days
+    warming_days = max(0, min(warmup_days, available_leadin))
+    return eval_start, eval_end, warming_days
+

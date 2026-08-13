@@ -1,17 +1,14 @@
 """
 mHM calibration assembler.
 
-Validates all outputs from mod10–mod17, introspects grid metadata, writes a
+Validates all outputs from mod10–mod18, introspects grid metadata, writes a
 calibration-ready mhm.nml (optimize=.TRUE.) plus companion namelists into the
 domain directory, then launches the mHM binary and streams its output.
 
-Run order: mod10 → mod11 → mod12 → mod13 → mod14 → mod15 → mod16 → mod17 → mod18.
+Run order: mod10 → mod11 → mod12 → mod13 → mod14 → mod15 → mod16 → mod17 → mod18 → mod19.
 
 mHM invocation: the binary is run with cwd=WORKING_DIR so that it finds all
 four nml files without path arguments.
-
-Geology: no dedicated runner exists; _bootstrap_geology() creates a single-class
-placeholder when geology files are absent.
 """
 
 from __future__ import annotations
@@ -22,9 +19,9 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import date
+from datetime import date, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, EVAL_START_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS, SEED
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -43,15 +40,21 @@ OPTI_FUNCTION = {
     "nse_lnnse": 3,   # 1 - 0.5*(NSE + lnNSE)
     "kge":       9,   # 1 - KGE(Q)
     "multi_kge": 14,  # power-6 combination of per-gauge KGE
+    "multi_objective_lnnse_highflow_lnnse_lowflow": 18  # power-6 combination of per-gauge lnnse_highflow and lnnse_lowflow
 }.get(OPTI_OBJECTIVE)
 if OPTI_FUNCTION is None:
     raise ValueError(
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
         "'nse', 'lnnse', 'nse_lnnse', 'kge', or 'multi_kge'.")
-WARMING_DAYS     = WARMUP_DAYS  # spin-up days before eval period (from config.py)
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
 if MODEL_TIMESTEP_H is None:
+    raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
+# Gridded-output write frequency -> mhm_outputs.nml timeStep_model_outputs,
+# matched to the input/model resolution from config.TIMESTEP.
+#   hourly -> 1  (after each 1-hour model step); daily -> -1 (daily preset)
+OUTPUT_TIMESTEP = {"hourly": 1, "daily": -1}.get(TIMESTEP)
+if OUTPUT_TIMESTEP is None:
     raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
 # mRM routing scheme -> mHM processCase(8) from config.ROUTING_METHOD.
 ROUTING_CASE = {"muskingum": 1, "adaptive": 2, "adaptive_varying": 3}.get(ROUTING_METHOD)
@@ -108,41 +111,10 @@ def _bootstrap_geology(morph_dir: Path) -> None:
     classmap  = morph_dir / "geology_class.asc"
     if classdef.exists() and classmap.exists():
         return
-
-    import netCDF4 as nc4
-    import numpy as np
-
-    log.info("Bootstrapping geology files from DEM mask (single class)...")
-
-    dem_nc = morph_dir / "dem.nc"
-    with nc4.Dataset(dem_nc) as ds:
-        x = ds.variables["x"][:]
-        y = ds.variables["y"][:]
-        dem = ds.variables["dem"][:]        # masked array, (y, x)
-        fill = ds.variables["dem"]._FillValue
-
-    nrows, ncols = dem.shape
-    xres = float(x[1] - x[0])
-    xll  = float(x[0]) - xres / 2
-    yll  = float(y[-1]) - xres / 2
-
-    if not classdef.exists():
-        classdef.write_text(_GEO_CLASSDEF)
-        log.info("Written: %s", classdef)
-
-    if not classmap.exists():
-        # class 1 where DEM is valid, nodata elsewhere
-        grid = np.where(np.asarray(dem) != fill, 1, -9999).astype(np.int32)
-        with open(classmap, "w") as fh:
-            fh.write(f"ncols         {ncols}\n")
-            fh.write(f"nrows         {nrows}\n")
-            fh.write(f"xllcorner     {xll:.1f}\n")
-            fh.write(f"yllcorner     {yll:.1f}\n")
-            fh.write(f"cellsize      {int(xres)}\n")
-            fh.write("NODATA_value  -9999\n")
-            for row in grid:
-                fh.write(" ".join(str(v) for v in row) + "\n")
-        log.info("Written: %s", classmap)
+    else:
+        raise ValueError(
+            "Run mod17 to generate geology_classdefinition.txt and geology_class.asc."
+        )
 
 
 def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
@@ -170,6 +142,25 @@ def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
     new_lines = lines[:start + 1] + rebuilt + lines[end:]
     param_nml.write_text("\n".join(new_lines) + "\n")
     log.info("Synced &geoparameter to %d geology unit(s): %s", n_geo, param_nml)
+
+
+def _write_mhm_outputs_nml(src: str, dst: Path, output_timestep: int) -> None:
+    """Copy mhm_outputs.nml to *dst*, forcing timeStep_model_outputs.
+
+    The write frequency is overridden to match the model/input resolution
+    (config.TIMESTEP) rather than the value carried by the repo template.
+    """
+    text = Path(src).read_text()
+    new_text, n = re.subn(
+        r"^(\s*timeStep_model_outputs\s*=\s*)-?\d+",
+        rf"\g<1>{output_timestep}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if n == 0:
+        raise ValueError(f"timeStep_model_outputs not found in {src}")
+    dst.write_text(new_text)
 
 
 def _ascii_header(path: Path) -> dict:
@@ -536,15 +527,19 @@ def main() -> None:
     log.info("Gauge obs window (all gauges): %s – %s", gauge_start, gauge_end)
 
     try:
-        eval_start, eval_end = derive_eval_period(
-            first_meteo, last_meteo, WARMING_DAYS,
+        eval_start, eval_end, warming_days = derive_eval_period(
+            first_meteo, last_meteo,
+            eval_start_date=date.fromisoformat(EVAL_START_DATE),
+            warmup_days=WARMUP_DAYS,
             obs_start=max(date.fromisoformat(START_DATE), gauge_start),
             obs_end=min(date.fromisoformat(END_DATE), gauge_end),
         )
     except ValueError as exc:
         log.error("%s", exc)
         sys.exit(1)
-    log.info("Eval period:  %s – %s  (warming_days=%d)", eval_start, eval_end, WARMING_DAYS)
+    log.info("Eval period:  %s – %s  (warming_days=%d, spin-up %s – %s)",
+             eval_start, eval_end, warming_days,
+             eval_start - timedelta(days=warming_days), eval_start - timedelta(days=1))
 
     lcover_scenes = read_lcover_scenes(inp / "luse")
     log.info("Land cover scenes: %s", [f for _, f in lcover_scenes])
@@ -574,7 +569,8 @@ def main() -> None:
         opti_function        = OPTI_FUNCTION,
         routing_case         = ROUTING_CASE,
         n_iterations         = N_ITERATIONS,
-        warming_days         = WARMING_DAYS,
+        seed                 = SEED,
+        warming_days         = warming_days,
         eval_start           = eval_start,
         eval_end             = eval_end,
         lcover_scenes        = lcover_scenes,
@@ -591,12 +587,16 @@ def main() -> None:
 
     for src, name in (
         (REPO_PARAM_NML,   "mhm_parameter.nml"),
-        (REPO_OUTPUT_NML,  "mhm_outputs.nml"),
         (REPO_MRM_OUT_NML, "mrm_outputs.nml"),
     ):
         dst = domain / name
         shutil.copy2(src, dst)
         log.info("Copied → %s", dst)
+
+    # mhm_outputs.nml: gridded-output write frequency wired to config.TIMESTEP.
+    out_nml = domain / "mhm_outputs.nml"
+    _write_mhm_outputs_nml(REPO_OUTPUT_NML, out_nml, OUTPUT_TIMESTEP)
+    log.info("Written → %s (timeStep_model_outputs=%d, %s)", out_nml, OUTPUT_TIMESTEP, TIMESTEP)
 
     _sync_geoparameter(domain / "mhm_parameter.nml", inp / "morph")
 
