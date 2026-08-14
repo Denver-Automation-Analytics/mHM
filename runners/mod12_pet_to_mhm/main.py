@@ -165,10 +165,12 @@ def main() -> None:
     lat_deg = compute_latitude_from_header(Path(HEADER_FILE), OUTPUT_CRS)   # (nrows, ncols)
     lat3d = np.radians(lat_deg)[np.newaxis, :, :]
 
-    # 5. Pre-compute time offsets (int32 hours-since-ref — negligible memory)
+    # 5. Pre-compute time offsets (int32; daily -> days-since, hourly -> hours-since
+    #    so the encoded step is 1, which mHM reads correctly).
     n_times = len(ds.time)
     all_times = pd.DatetimeIndex(ds.time.values)
-    time_offsets = ((all_times - pd.Timestamp(ref_time)) / pd.Timedelta("1h")).to_numpy(dtype="int32")
+    _step = "1D" if stat_freq == "daily" else "1h"
+    time_offsets = ((all_times - pd.Timestamp(ref_time)) / pd.Timedelta(_step)).to_numpy(dtype="int32")
 
     # 6. Create output NetCDF structure once (unlimited time; filled chunk-by-chunk)
     out_dir = Path(PET_OUT_DIR)

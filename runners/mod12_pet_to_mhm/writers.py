@@ -87,7 +87,7 @@ def write_pet(
         },
         "time": {
             "dtype":    "i4",
-            "units":    f"hours since {ref_time:%Y-%m-%d %H:%M:%S}",
+            "units":    f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}",
             "calendar": "standard",
         },
     }
@@ -137,7 +137,7 @@ def create_pet_nc(
 
         # time variable
         tv = f.createVariable("time", "i4", ("time",))
-        tv.units    = f"hours since {ref_time:%Y-%m-%d %H:%M:%S}"
+        tv.units    = f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}"
         tv.calendar = "standard"
         tv.axis     = "T"
 

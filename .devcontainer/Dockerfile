@@ -2,6 +2,7 @@ FROM continuumio/miniconda3:latest
 
 # Install system utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    awscli \
     curl \
     wget \
     git \

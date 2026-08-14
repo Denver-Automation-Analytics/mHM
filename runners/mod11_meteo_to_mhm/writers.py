@@ -96,6 +96,10 @@ def write_meteo(ds: xr.Dataset,
         ds = ds.rio.write_crs(crs)
 
     var = list(ds.data_vars)[0]
+    # mHM mis-reads daily data encoded as "hours since" (dt=24); use the unit
+    # giving an integer step of 1 (days for daily/monthly, hours for hourly).
+    _t = pd.DatetimeIndex(ds["time"].values)
+    _tu = "days" if (len(_t) < 2 or (_t[1] - _t[0]) >= pd.Timedelta("1D")) else "hours"
     encoding = {
         var: {
             "dtype":     "f8",
@@ -105,7 +109,7 @@ def write_meteo(ds: xr.Dataset,
         },
         "time": {
             "dtype":    "i4",
-            "units":    f"hours since {ref_time:%Y-%m-%d %H:%M:%S}",
+            "units":    f"{_tu} since {ref_time:%Y-%m-%d %H:%M:%S}",
             "calendar": "standard",
         },
     }

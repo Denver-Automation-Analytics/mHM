@@ -40,12 +40,13 @@ OPTI_FUNCTION = {
     "nse_lnnse": 3,   # 1 - 0.5*(NSE + lnNSE)
     "kge":       9,   # 1 - KGE(Q)
     "multi_kge": 14,  # power-6 combination of per-gauge KGE
+    "kge_q_et":  29,  # combines KGE(Q) with catchment-average actual-ET (needs et.nc)
     "multi_objective_lnnse_highflow_lnnse_lowflow": 18  # power-6 combination of per-gauge lnnse_highflow and lnnse_lowflow
 }.get(OPTI_OBJECTIVE)
 if OPTI_FUNCTION is None:
     raise ValueError(
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
-        "'nse', 'lnnse', 'nse_lnnse', 'kge', or 'multi_kge'.")
+        "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', or 'kge_q_et'.")
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
 if MODEL_TIMESTEP_H is None:
