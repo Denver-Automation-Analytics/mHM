@@ -10,6 +10,7 @@ area-weighted basin mean.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -76,7 +77,9 @@ def _reduce(da: xr.DataArray, mask_da: xr.DataArray, ydim: str, xdim: str):
     """
     masked = da.where(mask_da)
     series = masked.mean(dim=(ydim, xdim), skipna=True).compute().values
-    field = masked.sum(dim="time", skipna=True).compute().values
+    # Re-apply the mask: sum(skipna) turns all-NaN (out-of-domain) cells into 0,
+    # which would pollute per-cell field stats/maps — keep them NaN instead.
+    field = masked.sum(dim="time", skipna=True).where(mask_da).compute().values
     total = float(np.nansum(series))
     return series, total, field
 
@@ -159,3 +162,96 @@ def read_inputs(pre_nc: Path, pet_nc: Path, window=None) -> Dict:
 def monthly_sum(time: pd.DatetimeIndex, daily: np.ndarray) -> pd.Series:
     """Aggregate a daily domain-mean series to monthly totals [mm]."""
     return pd.Series(daily, index=time).resample("MS").sum()
+
+
+# Terrain (L0 morphology) fields to map and summarise.
+TERRAIN_VARS = ["dem", "slope", "aspect"]
+
+# A parameter is "rail-pinned" when its final value sits within this fraction of
+# a bound (relative to the bound span).
+RAIL_TOL = 0.02
+# mhm_parameter.nml / FinalParam.nml line: name = lower, upper, value, flag, flag
+_PARAM_LINE = re.compile(
+    r"^\s*([A-Za-z_0-9]+)\s*=\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)")
+
+
+def read_parameters(param_nml: Path) -> List[Dict]:
+    """Parse calibrated parameters (name, lower, upper, value) and flag rails.
+
+    ``pos`` is the value's fractional position in [lower, upper]; a parameter is
+    ``railed`` when pos is within RAIL_TOL of either bound, and ``fixed`` when the
+    bounds are equal (not calibrated).
+    """
+    text = param_nml.read_bytes().decode("latin-1")
+    params: List[Dict] = []
+    for line in text.splitlines():
+        m = _PARAM_LINE.match(line)
+        if not m:
+            continue
+        name, lo, hi, val = m.group(1), float(m.group(2)), float(m.group(3)), float(m.group(4))
+        rng = hi - lo
+        fixed = rng <= 0.0
+        pos = 0.5 if fixed else (val - lo) / rng
+        railed = (not fixed) and (pos <= RAIL_TOL or pos >= 1.0 - RAIL_TOL)
+        params.append({"name": name, "lower": lo, "upper": hi, "value": val,
+                       "pos": pos, "fixed": fixed, "railed": railed})
+    if not params:
+        raise ValueError(f"No parameter lines parsed from {param_nml}.")
+    return params
+
+
+def read_discharge(discharge_nc: Path, gauge_dir: Path, window=None) -> Dict:
+    """Read routed simulated/observed discharge per gauge [m3 s-1].
+
+    mRM writes Qsim_/Qobs_<10-digit local id> in discharge.nc; observed gaps are
+    stored as the nodata sentinel and returned as NaN. Gauge metadata (USGS site
+    number, name) is taken from input/gauge/id_map.csv.
+    """
+    start, end = window if window is not None else (EVAL_START_DATE, END_DATE)
+    ds = xr.open_dataset(discharge_nc, decode_times=True).sel(time=slice(start, end))
+    if ds.sizes.get("time", 0) == 0:
+        raise ValueError(f"{discharge_nc} has no time steps in {start}..{end}.")
+    time = pd.DatetimeIndex(ds["time"].values)
+
+    meta = pd.read_csv(gauge_dir / "id_map.csv").set_index("local_id")
+    gauges: List[Dict] = []
+    for lid in meta.index:
+        vsim, vobs = f"Qsim_{int(lid):010d}", f"Qobs_{int(lid):010d}"
+        if vsim not in ds:
+            continue
+        qsim = np.asarray(ds[vsim].values, dtype=float)
+        qobs = np.asarray(ds[vobs].values, dtype=float) if vobs in ds else np.full_like(qsim, np.nan)
+        qobs[qobs <= -9990.0] = np.nan
+        qsim[qsim <= -9990.0] = np.nan
+        gauges.append({
+            "local_id": int(lid),
+            "site_no": str(meta.at[lid, "site_no"]),
+            "name": str(meta.at[lid, "name"]),
+            "time": time,
+            "qsim": qsim,
+            "qobs": qobs,
+        })
+    if not gauges:
+        raise ValueError(f"No Qsim_* variables found in {discharge_nc}.")
+    return {"gauges": gauges, "time": time}
+
+
+def read_terrain(morph_dir: Path) -> Dict:
+    """Read L0 terrain fields (dem, slope, aspect), clipped to the domain polygon."""
+    out: Dict = {"fields": {}}
+    for var in TERRAIN_VARS:
+        path = morph_dir / f"{var}.nc"
+        if not path.exists():
+            continue
+        with xr.open_dataset(path) as ds:
+            x = np.asarray(ds["x"].values, dtype=float)
+            y = np.asarray(ds["y"].values, dtype=float)
+            fld = np.asarray(ds[var].values, dtype=float)
+        fld = np.where(fld <= -9990.0, np.nan, fld)
+        mask = _domain_mask(x, y)
+        out["fields"][var] = np.where(mask, fld, np.nan)
+        out.setdefault("x", x)
+        out.setdefault("y", y)
+    if not out["fields"]:
+        raise FileNotFoundError(f"No terrain fields (dem/slope/aspect) under {morph_dir}.")
+    return out

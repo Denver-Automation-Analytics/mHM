@@ -30,7 +30,9 @@ from config import N_OMP_THREADS, WORKING_DIR, START_DATE, END_DATE
 
 from metrics import compute_metrics, metrics_to_dict
 import plots
-from readers import read_fluxes, read_inputs, resolve_window
+import stats
+from readers import (read_fluxes, read_inputs, resolve_window,
+                     read_discharge, read_terrain, read_parameters)
 
 MHM_BINARY = "/workspace/build/mhm"
 FLUX_FILE = "mHM_Fluxes_States.nc"
@@ -196,6 +198,35 @@ def _print_summary(metrics, window) -> None:
     log.info("=" * 78)
 
 
+def _print_hydro_summary(dstats) -> None:
+    log.info("=" * 78)
+    log.info("HYDROGRAPH SKILL (simulated vs. observed discharge)")
+    log.info("%-10s %8s %8s %8s %9s %10s", "gauge", "KGE", "NSE", "logNSE", "PBIAS%", "n_obs")
+    log.info("-" * 78)
+    for s in dstats:
+        if s.get("n_obs", 0) == 0:
+            log.info("%-10s %8s %8s %8s %9s %10d", s["site_no"], "-", "-", "-", "-", 0)
+            continue
+        def _f(v):
+            return "n/a" if v is None else f"{v:8.3f}"
+        log.info("%-10s %8s %8s %8s %9s %10d", s["site_no"], _f(s["kge"]), _f(s["nse"]),
+                 _f(s["lognse"]),
+                 "n/a" if s["pbias_pct"] is None else f"{s['pbias_pct']:8.1f}",
+                 s["n_obs"])
+    log.info("=" * 78)
+
+
+def _print_param_summary(pstat) -> None:
+    log.info("=" * 78)
+    log.info("CALIBRATED PARAMETERS: %d free, %d rail-pinned, %d fixed",
+             pstat["n_free"], pstat["n_railed"], pstat["n_fixed"])
+    if pstat["railed"]:
+        log.warning("Rail-pinned (value at a bound): %s", ", ".join(pstat["railed"]))
+    else:
+        log.info("No free parameter is rail-pinned — healthy calibration spread.")
+    log.info("=" * 78)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Inspect mHM results (water balance).")
     ap.add_argument("--skip-run", action="store_true",
@@ -240,6 +271,33 @@ def main() -> None:
     metrics = compute_metrics(flux, inp)
     _print_summary(metrics, window)
 
+    # Hydrograph (sim vs obs), terrain and precipitation diagnostics. Each is
+    # optional: a missing file is warned about but never aborts the run.
+    disch = dstats = terr = tstats = None
+    try:
+        disch = read_discharge(out_dir / "discharge.nc", work / "input/gauge", window)
+        dstats = stats.discharge_stats(disch)
+        _print_hydro_summary(dstats)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        log.warning("Hydrograph diagnostics skipped: %s", exc)
+    try:
+        terr = read_terrain(work / "input/morph")
+        tstats = stats.terrain_stats(terr)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        log.warning("Terrain diagnostics skipped: %s", exc)
+    pstats = stats.precip_stats(inp, window)
+
+    params = param_stats = None
+    try:
+        pfile = work / "FinalParam.nml"
+        if not pfile.exists():
+            pfile = work / "mhm_parameter.nml"
+        params = read_parameters(pfile)
+        param_stats = stats.parameter_stats(params)
+        _print_param_summary(param_stats)
+    except (FileNotFoundError, ValueError) as exc:
+        log.warning("Parameter diagnostics skipped: %s", exc)
+
     report = {
         "eval_start": window[0],
         "eval_end": window[1],
@@ -248,13 +306,20 @@ def main() -> None:
                       "pet_input": inp["totals"]["pet"],
                       "delta_storage": flux["delta_storage"]},
         "metrics": metrics_to_dict(metrics),
+        "hydrograph": dstats,
+        "terrain": tstats,
+        "precipitation": pstats,
+        "parameters": param_stats,
     }
     report_path = out_dir / "diagnostics_report.json"
     report_path.write_text(json.dumps(report, indent=2))
     log.info("Wrote report: %s", report_path)
 
     plot_dir = out_dir / "diagnostics"
-    paths = plots.write_all(flux, inp, metrics, plot_dir)
+    paths = plots.write_all(flux, inp, metrics, plot_dir,
+                            disch=disch, dstats=dstats,
+                            terr=terr, tstats=tstats, pstats=pstats,
+                            params=params)
     log.info("Wrote %d diagnostic plots to %s", len(paths), plot_dir)
 
 

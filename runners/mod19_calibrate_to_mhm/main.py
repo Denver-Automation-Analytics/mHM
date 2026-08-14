@@ -95,31 +95,6 @@ logging.basicConfig(
 log = logging.getLogger("calibrate_to_mhm")
 
 
-# ---------------------------------------------------------------------------
-# Geology placeholder bootstrap
-# ---------------------------------------------------------------------------
-
-# Single formation: the bootstrap map only ever assigns class 1, so extra
-# GeoParam entries would be dead parameters that DDS needlessly optimizes.
-_GEO_CLASSDEF = """\
-nGeo_Formations  1
-GeoParam(i)   ClassUnit     Karstic      Description
-         1                1           0      GeoUnit-1
-!<-END
-"""
-
-
-def _bootstrap_geology(morph_dir: Path) -> None:
-    """Create single-class geology files from the DEM mask if absent."""
-    classdef = morph_dir / "geology_classdefinition.txt"
-    classmap  = morph_dir / "geology_class.asc"
-    if classdef.exists() and classmap.exists():
-        return
-    else:
-        raise ValueError(
-            "Run mod17 to generate geology_classdefinition.txt and geology_class.asc."
-        )
-
 
 def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
     """Trim the &geoparameter block to match nGeo_Formations (mHM requires equality)."""
@@ -555,8 +530,7 @@ def main() -> None:
     n_soil_horizons, soil_depths = read_soil_info(inp / "morph" / "soil_classdefinition.txt")
     log.info("Soil horizons: %d  depths: %s mm", n_soil_horizons, soil_depths)
 
-    # Phase 2b — bootstrap geology if absent; resample ASCII inputs to L0
-    _bootstrap_geology(inp / "morph")
+    # Phase 2b — resample ASCII inputs to L0
     dem_nc = inp / "morph" / "dem.nc"
     _resample_ascii_to_l0(inp / "morph" / "soil_class.asc", dem_nc)
     _build_idgauges_asc(inp / "morph", inp / "gauge", dem_nc)

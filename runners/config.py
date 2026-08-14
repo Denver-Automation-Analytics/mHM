@@ -13,9 +13,9 @@ WARMUP_DAYS     = 0  # spin-up days drawn from forcing in [EVAL_START_DATE - WAR
 TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD  = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
 OPTI_OBJECTIVE  = "multi_kge"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "kge_q_et"
-N_ITERATIONS   = 500     # mod19 DDS optimizer trials; more = better calibration, longer runtime
+N_ITERATIONS   = 50     # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED           = 32      # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS  = 20     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
 PET_METHOD     = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
-WANTED_GAUGE_IDS = ["08208000","08206600","08206700","08194500"]
+WANTED_GAUGE_IDS = ["08208000","08206700","08194500","08205500","08197500","08206600"]
 NODATA = -9999
