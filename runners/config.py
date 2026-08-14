@@ -7,7 +7,7 @@ L1_CELL_SIZE_M = 1000      # Hydrologic simulation grid resolution (i.e., mHM ou
 L2_CELL_SIZE_M = 3000      # Meteorological grid resolution (mod11, mod12)
 OUTPUT_CRS     = "EPSG:5070"  # common projected CRS for all spatial outputs
 START_DATE      = "2017-10-01"  # forcing/simulation start; earliest date mHM may draw spin-up from
-END_DATE        = "2020-10-01"  # forcing/simulation and evaluation end. NOTE: keep the sim span <=2 yrs from START_DATE; longer spans trigger an mHM large-domain meteo-zeroing bug (3 yr=48 zero-PET days, 10 yr=312 + overflow)
+END_DATE        = "2020-10-01"  # forcing/simulation and evaluation end.
 EVAL_START_DATE = "2018-10-01"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
 WARMUP_DAYS     = 0  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE); capped by START_DATE. Does NOT shift the eval window.
 TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
