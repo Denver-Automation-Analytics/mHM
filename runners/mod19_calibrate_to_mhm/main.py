@@ -40,13 +40,14 @@ OPTI_FUNCTION = {
     "nse_lnnse": 3,   # 1 - 0.5*(NSE + lnNSE)
     "kge":       9,   # 1 - KGE(Q)
     "multi_kge": 14,  # power-6 combination of per-gauge KGE
+    "wnse":      31,  # 1 - weighted NSE(Q); weights errors by observed flow (Hundecha & Bardossy 2004)
     "kge_q_et":  29,  # combines KGE(Q) with catchment-average actual-ET (needs et.nc)
     "multi_objective_lnnse_highflow_lnnse_lowflow": 18  # power-6 combination of per-gauge lnnse_highflow and lnnse_lowflow
 }.get(OPTI_OBJECTIVE)
 if OPTI_FUNCTION is None:
     raise ValueError(
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
-        "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', or 'kge_q_et'.")
+        "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', 'wnse', or 'kge_q_et'.")
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 # Always 1 h: mHM's daily model timestep (24) mis-indexes daily meteo (iMeteoTS bug in
 # mo_meteo_handler.f90 advances forcing only every 24 model-days), so run the model

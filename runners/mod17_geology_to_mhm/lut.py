@@ -14,6 +14,10 @@ log = logging.getLogger("geology_to_mhm")
 MAX_GEO_UNITS = 25   # mHM parameter maxGeoUnit (mo_mpr_constants.f90)
 NONKARST_ID = 1
 NONKARST_DESC = "Non_karst"
+# USGS classes that are losing/non-aquifer basins rather than gaining karst; kept
+# as their own geology unit but flagged non-karstic so mHM's karst loss/gain lever
+# (rechargeFactor_karstic) targets only true karst (e.g. the Carbonate plateau).
+NON_KARST_LABELS = {"Evaporite_Basins"}
 
 
 def build_geology(class_masks: list[tuple[str, np.ndarray]], grid_def: dict,
@@ -68,7 +72,8 @@ def build_geology(class_masks: list[tuple[str, np.ndarray]], grid_def: dict,
 def _write_classdefinition(path: Path, present: list[tuple[str, int]]) -> None:
     rows = [(NONKARST_ID, NONKARST_ID, 0, NONKARST_DESC)]
     for label, gid in present:
-        rows.append((gid, gid, 1, label))
+        karstic = 0 if label in NON_KARST_LABELS else 1
+        rows.append((gid, gid, karstic, label))
 
     lines = [
         f"nGeo_Formations  {len(rows)}",

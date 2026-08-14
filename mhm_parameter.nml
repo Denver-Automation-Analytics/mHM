@@ -57,7 +57,7 @@
   rootFractionCoefficient_impervious =  0.9000,      0.9500,          0.93,     1,       1
   rootFractionCoefficient_pervious   =  0.0010,      0.2500,          0.02,     1,       1
   ! shape factor for partitioning effective precipitation into runoff and infiltration based on soil wetness [-]
-  infiltrationShapeFactor            =  1.0000,      6.0000,          1.75,     1,       1
+  infiltrationShapeFactor            =  1.0000,      4.0000,          1.75,     1,       1
 /
 &soilmoisture2
   ! same as soil moisture 1
@@ -174,14 +174,14 @@
   interflowRecession_slope           =  0.0000,      10.000,           7.0,     1,       1
   fastInterflowRecession_forest      =  1.0000,      3.0000,           1.5,     1,       1
   ! multiplier for variability of saturated hydraulic conductivity to derive slow interflow recession constant
-  slowInterflowRecession_Ks          =  1.0000,      30.000,          15.0,     1,       1
+  slowInterflowRecession_Ks          =  1.0000,      15.000,          10.0,     1,       1
   ! multiplier for variability of saturated hydraulic conductivity to derive slow interflow exponent
   exponentSlowInterflow              =  0.0500,      0.3000,         0.125,     1,       1
 /
 
 ! percolation
 &percolation1
-  rechargeCoefficient                =  0.0000,      50.000,          35.0,     1,       1
+  rechargeCoefficient                =  0.0000,      25.000,          15.0,     1,       1
   rechargeFactor_karstic             = -5.0000,      5.0000,          -1.0,     1,       1
   gain_loss_GWreservoir_karstic      =  1.0000,      1.0000,           1.0,     0,       1
 /
