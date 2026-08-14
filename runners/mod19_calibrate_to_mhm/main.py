@@ -48,7 +48,10 @@ if OPTI_FUNCTION is None:
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
         "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', or 'kge_q_et'.")
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
-MODEL_TIMESTEP_H = {"hourly": 1, "daily": 24}.get(TIMESTEP)
+# Always 1 h: mHM's daily model timestep (24) mis-indexes daily meteo (iMeteoTS bug in
+# mo_meteo_handler.f90 advances forcing only every 24 model-days), so run the model
+# hourly and let it disaggregate the daily forcing (as the reference test_domain does).
+MODEL_TIMESTEP_H = {"hourly": 1, "daily": 1}.get(TIMESTEP)
 if MODEL_TIMESTEP_H is None:
     raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
 # Gridded-output write frequency -> mhm_outputs.nml timeStep_model_outputs,

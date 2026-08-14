@@ -12,7 +12,7 @@ EVAL_START_DATE = "2018-10-01"  # calibration scoring starts here; keep FIXED so
 WARMUP_DAYS     = 0  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE); capped by START_DATE. Does NOT shift the eval window.
 TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD  = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
-OPTI_OBJECTIVE  = "kge_q_et"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "kge_q_et"
+OPTI_OBJECTIVE  = "multi_kge"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "kge_q_et"
 N_ITERATIONS   = 500     # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED           = 32      # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS  = 20     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON

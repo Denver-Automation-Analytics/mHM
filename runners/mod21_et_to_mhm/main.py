@@ -49,14 +49,15 @@ if not os.path.exists(WATERSHED_FILE):
 
 def _l1_grid() -> tuple[np.ndarray, np.ndarray]:
     """Return (easting, northing) cell centres of the mHM L1 grid [EPSG:5070]."""
-    flux = Path(WORKING_DIR) / "output" / "mHM_Fluxes_States.nc"
-    if flux.exists():
-        with xr.open_dataset(flux) as ds:
-            return (np.asarray(ds["easting"].values, float),
-                    np.asarray(ds["northing"].values, float))
-    with xr.open_dataset(Path(WORKING_DIR) / "input" / "latlon" / "latlon.nc") as ds:
-        return (np.asarray(ds["xc"].values, float),
-                np.asarray(ds["yc"].values, float))
+    # latlon.nc is authoritative; the flux output can be stale after a resolution change.
+    latlon = Path(WORKING_DIR) / "input" / "latlon" / "latlon.nc"
+    if latlon.exists():
+        with xr.open_dataset(latlon) as ds:
+            return (np.asarray(ds["xc"].values, float),
+                    np.asarray(ds["yc"].values, float))
+    with xr.open_dataset(Path(WORKING_DIR) / "output" / "mHM_Fluxes_States.nc") as ds:
+        return (np.asarray(ds["easting"].values, float),
+                np.asarray(ds["northing"].values, float))
 
 
 def _l1_lonlat() -> tuple[np.ndarray, np.ndarray]:
