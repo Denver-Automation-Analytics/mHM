@@ -21,7 +21,7 @@ import subprocess
 import sys
 from datetime import date, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, EVAL_START_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS, SEED
+from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, EVAL_START_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS, SEED, RESUME
 from pathlib import Path
 
 from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
@@ -122,6 +122,50 @@ def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
     new_lines = lines[:start + 1] + rebuilt + lines[end:]
     param_nml.write_text("\n".join(new_lines) + "\n")
     log.info("Synced &geoparameter to %d geology unit(s): %s", n_geo, param_nml)
+
+
+# name = lower, upper, VALUE, flag, flag  -> groups: prefix, name, lower, upper, value, rest
+# Numbers may be Fortran scientific notation (e.g. 7.880E-01), so consume the exponent.
+_NUM = r"-?[0-9.]+(?:[eEdD][+-]?[0-9]+)?"
+_PARAM_VALUE_RE = re.compile(
+    rf"^(\s*([^=]+?)\s*=\s*({_NUM})\s*,\s*({_NUM})\s*,\s*)({_NUM})(.*)$")
+
+
+def _pf(s: str) -> float:
+    """Parse a Fortran real that may use D/d exponents."""
+    return float(s.replace("D", "E").replace("d", "e"))
+
+
+def _apply_resume(param_nml: Path, final_nml: Path) -> None:
+    """Seed DDS from the previous calibration.
+
+    Copies each parameter's final value from *final_nml* into the value (3rd)
+    column of *param_nml*, clamped to this file's (possibly changed) bounds, so
+    the optimiser restarts from the last result while honouring current ranges.
+    """
+    if not final_nml.exists():
+        log.warning("RESUME=True but %s not found; using template start values.", final_nml)
+        return
+    finals: dict[str, float] = {}
+    for line in final_nml.read_bytes().decode("latin-1").splitlines():
+        m = _PARAM_VALUE_RE.match(line)
+        if m:
+            finals[m.group(2).strip()] = _pf(m.group(5))
+
+    out: list[str] = []
+    n = 0
+    for line in param_nml.read_bytes().decode("latin-1").splitlines():
+        m = _PARAM_VALUE_RE.match(line)
+        name = m.group(2).strip() if m else None
+        if m and name in finals:
+            lo, hi = _pf(m.group(3)), _pf(m.group(4))
+            val = min(max(finals[name], lo), hi)   # clamp resumed value to current bounds
+            out.append(f"{m.group(1)}{val:.10g}{m.group(6)}")
+            n += 1
+        else:
+            out.append(line)
+    param_nml.write_bytes(("\n".join(out) + "\n").encode("latin-1"))
+    log.info("RESUME: seeded %d parameter start value(s) from %s.", n, final_nml.name)
 
 
 def _write_mhm_outputs_nml(src: str, dst: Path, output_timestep: int) -> None:
@@ -578,6 +622,10 @@ def main() -> None:
     log.info("Written → %s (timeStep_model_outputs=%d, %s)", out_nml, OUTPUT_TIMESTEP, TIMESTEP)
 
     _sync_geoparameter(domain / "mhm_parameter.nml", inp / "morph")
+
+    # RESUME: reseed DDS start values from the previous run's FinalParam.nml.
+    if RESUME:
+        _apply_resume(domain / "mhm_parameter.nml", domain / "FinalParam.nml")
 
     # Phase 5 — run mHM calibration
     log.info("Launching mHM calibration: %s  (cwd=%s)", MHM_BINARY, domain)

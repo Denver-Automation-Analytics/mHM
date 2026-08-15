@@ -31,7 +31,7 @@
   ! organic matter content [%] for forest, impervious and pervious
   orgMatterContent_forest            =  5.0000,     10.0000,           7.0,     1,       1
   orgMatterContent_impervious        =  0.0000,      1.0000,           0.5,     1,       1
-  orgMatterContent_pervious          =  1.0000,     12.0000,           2.5,     1,       1
+  orgMatterContent_pervious          =  1.0000,     20.0000,           2.5,     1,       1
   ! Zacharias PTF parameters below and above 66.5 % sand content (Zacharias et al., 2007, doi:10.2136/sssaj2006.0098)
   ! constant
   PTF_lower66_5_constant             =  0.7500,      0.8000,     7.880E-01,     1,       1
@@ -57,7 +57,7 @@
   rootFractionCoefficient_impervious =  0.9000,      0.9500,          0.93,     1,       1
   rootFractionCoefficient_pervious   =  0.0010,      0.2500,          0.02,     1,       1
   ! shape factor for partitioning effective precipitation into runoff and infiltration based on soil wetness [-]
-  infiltrationShapeFactor            =  1.0000,      4.0000,          1.75,     1,       1
+  infiltrationShapeFactor            =  1.0000,      6.0000,          1.75,     1,       1
 /
 &soilmoisture2
   ! same as soil moisture 1
@@ -182,7 +182,7 @@
 ! percolation
 &percolation1
   rechargeCoefficient                =  0.0000,      25.000,          15.0,     1,       1
-  rechargeFactor_karstic             = -5.0000,      5.0000,          -1.0,     1,       1
+  rechargeFactor_karstic             = -5.0000,      10.000,          -1.0,     1,       1
   gain_loss_GWreservoir_karstic      =  1.0000,      1.0000,           1.0,     0,       1
 /
 
