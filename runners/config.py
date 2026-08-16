@@ -12,7 +12,7 @@ EVAL_START_DATE = "2017-04-01"  # calibration scoring starts here; keep FIXED so
 WARMUP_DAYS     = 0  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE); capped by START_DATE. Does NOT shift the eval window.
 TIMESTEP        = "daily"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD  = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
-OPTI_OBJECTIVE  = "kge"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
+OPTI_OBJECTIVE  = "nse_lnnse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
 N_ITERATIONS   = 500     # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED           = 32      # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS  = 25     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
@@ -20,3 +20,14 @@ PET_METHOD     = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "pri
 WANTED_GAUGE_IDS = ["08194500",]#"08192000","08190500","08193000"] 
 NODATA = -9999
 RESUME = False  # mod19: if True, reseed DDS start values from the previous run's FinalParam.nml
+
+# --- mod22 (mHM/mRM -> TRITON hydraulic model inputs) ---
+TRITON_OUT_DIR         = "/workspace/triton/input/nueces"  # directory that receives the generated TRITON input files (matches the input/<domain>/ paths in the .cfg)
+TRITON_DOMAIN_NAME     = "nueces"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
+TRITON_DEM_CELLSIZE_M  = 30           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
+TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
+TRITON_EXTBC_TYPE      = 2            # default outlet boundary: 2 = normal slope (velocity from bed slope + Manning roughness)
+TRITON_EXTBC_VALUE     = 0.001        # value for the boundary condition; for type 2 this is the bed slope [-]
+TRITON_EXTBC_SEG_LEN_M = 2000         # length [m] of the auto-derived outlet boundary segment
+TRITON_PRINT_INTERVAL_S = 3600        # TRITON spatial output interval [s]
+TRITON_CONST_MANN      = 0.035        # fallback constant Manning roughness used until the .mann file is generated
