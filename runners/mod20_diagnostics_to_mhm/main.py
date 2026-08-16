@@ -275,7 +275,13 @@ def main() -> None:
     # optional: a missing file is warned about but never aborts the run.
     disch = dstats = terr = tstats = None
     try:
-        disch = read_discharge(out_dir / "discharge.nc", work / "input/gauge", window)
+        # mRM writes gauge discharge daily to discharge.nc and, for sub-daily
+        # (hourly) runs, additionally at the model step to subdaily_discharge.nc;
+        # prefer the latter so the hydrograph and skill metrics stay hourly.
+        disch_nc = out_dir / "subdaily_discharge.nc"
+        if not disch_nc.exists():
+            disch_nc = out_dir / "discharge.nc"
+        disch = read_discharge(disch_nc, work / "input/gauge", window)
         dstats = stats.discharge_stats(disch)
         _print_hydro_summary(dstats)
     except (FileNotFoundError, ValueError, KeyError) as exc:

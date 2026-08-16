@@ -96,7 +96,10 @@ def _recover_ref_time(temp_dirs: dict) -> "pd.Timestamp | None":
 def _iter_monthly_windows(ds, start_date: str, end_date: str):
     """Yield (batch_id, ds_slice) for each calendar month in [start, end]."""
     win_start = pd.Timestamp(start_date)
-    win_end   = pd.Timestamp(end_date)
+    # Cover the whole final day: mHM expands the day-granular [start, end]
+    # simulation period to hourly forcing and demands all 24 hours of end_date,
+    # so a midnight cutoff would leave the last day 23 records short.
+    win_end   = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
 
     month_starts = pd.date_range(win_start, win_end, freq="MS")
     if len(month_starts) == 0 or month_starts[0] > win_start:
@@ -211,7 +214,11 @@ def main() -> None:
         log.info("Using init_time = %s UTC", init_time)
         windows = [(0, select_window(ds, init_time, forecast_hours=48))]
     else:
-        ds_full = ds.sel(time=slice(START_DATE, END_DATE))
+        # Include the whole END_DATE day (through 23:00) so hourly forcing has
+        # the full final day mHM requires; see _iter_monthly_windows.
+        _src_end = (pd.Timestamp(END_DATE) + pd.Timedelta(days=1)
+                    - pd.Timedelta(hours=1))
+        ds_full = ds.sel(time=slice(pd.Timestamp(START_DATE), _src_end))
         if ds_full.sizes.get("time", 0) == 0:
             raise ValueError(
                 f"No timesteps found in [{START_DATE}, {END_DATE}]. "
@@ -325,7 +332,7 @@ if __name__ == "__main__":
     METEO_OUTPUT_DIR = os.path.join(WORKING_DIR, "input/meteo")  # output directory for mHM-ready files
     LATLON_OUTPUT_DIR = os.path.join(WORKING_DIR, "input/latlon") # output directory for latlon.nc
     FORECAST         = False                            # use forecast (True) or analysis (False) HRRR subscription
-    RESUME           = True    # skip finished vars / resume missing temp batches instead of wiping _tmp
+    RESUME           = False    # skip finished vars / resume missing temp batches instead of wiping _tmp
 
     # --- HRRR subscription -----------------------------------------------
     # Repo name is read from the HRRR_REPO env var.
