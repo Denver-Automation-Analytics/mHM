@@ -76,6 +76,46 @@ def warp_dem(src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float,
     return grid
 
 
+def read_grid(tif: Path) -> Dict:
+    """Return the grid geometry of an existing (already warped) DEM GeoTIFF."""
+    ds = gdal.Open(str(tif))
+    gt = ds.GetGeoTransform()
+    grid = {
+        "tif": Path(tif), "x0": gt[0], "y0": gt[3], "cellsize": gt[1],
+        "ncols": ds.RasterXSize, "nrows": ds.RasterYSize, "nodata": NODATA,
+    }
+    ds = None
+    return grid
+
+
+def warp_to_dem_grid(src_tif: Path, domain_file: Path, dst_crs: str, dem_grid: Dict,
+                     out_tif: Path, resample: str = "near",
+                     dst_nodata: float = NODATA) -> Path:
+    """Warp *src_tif* onto the exact TRITON DEM grid (same extent/cellsize/dims).
+
+    Pixels outside the watershed are masked to *dst_nodata*. ``near`` resampling
+    preserves categorical land-cover codes.
+    """
+    dom = _dissolved_polygon(domain_file, dst_crs)
+    with tempfile.NamedTemporaryFile(suffix=".gpkg", delete=False) as tmp:
+        cutline = tmp.name
+    dom.to_file(cutline, driver="GPKG")
+    cs = dem_grid["cellsize"]
+    xmin, ymax = dem_grid["x0"], dem_grid["y0"]
+    xmax, ymin = xmin + dem_grid["ncols"] * cs, ymax - dem_grid["nrows"] * cs
+    try:
+        gdal.Warp(
+            str(out_tif), str(src_tif),
+            dstSRS=dst_crs, xRes=cs, yRes=cs, outputBounds=[xmin, ymin, xmax, ymax],
+            cutlineDSName=cutline, cropToCutline=False,
+            dstNodata=dst_nodata, resampleAlg=resample, multithread=True,
+            creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
+        )
+    finally:
+        os.unlink(cutline)
+    return Path(out_tif)
+
+
 def build_zones(runoff: Dict) -> Tuple[np.ndarray, np.ndarray, int]:
     """Assign sequential runoff-zone ids (1..N) to valid L1 cells.
 

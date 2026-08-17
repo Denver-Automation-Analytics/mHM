@@ -27,7 +27,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import OUTPUT_CRS, START_DATE, END_DATE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
+from config import OUTPUT_CRS, START_DATE, END_DATE, EVAL_START_DATE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
+
+# mHM reads the evaluation gauge only over evalPer; a gauge file that starts before
+# EVAL_START_DATE makes the hourly read_timeseries offset overflow (mo_read_timeseries.f90).
+GAUGE_START = EVAL_START_DATE
 
 import geopandas as gpd
 
@@ -67,7 +71,7 @@ def main() -> None:
     gauges_in = get_usgs_stations(
         model_perimeter=model_perimeter,
         variable_type="flow",
-        dates=(START_DATE, END_DATE),
+        dates=(GAUGE_START, END_DATE),
     )
 
     if gauges_in.empty:
@@ -103,7 +107,7 @@ def main() -> None:
                 site       = site_no,
                 parameter  = "Flow",
                 frequency  = frequency,
-                start_date = START_DATE,
+                start_date = GAUGE_START,
                 end_date   = END_DATE,
             )
             if raw is None:
@@ -173,7 +177,7 @@ def main() -> None:
     write_nc(out_root / "idgauges.nc", l0_header, grid, nodata=NODATA)
     write_header_txt(l0_header, out_root / "header.txt")
     write_id_map(out_root / "id_map.csv", survivors,
-                 start=START_DATE, end=END_DATE, cadence=TIMESTEP)
+                 start=GAUGE_START, end=END_DATE, cadence=TIMESTEP)
 
     log.info("Done. %d gauge(s) written to %s", len(survivors), out_root)
 

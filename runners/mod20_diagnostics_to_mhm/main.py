@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import N_OMP_THREADS, WORKING_DIR, START_DATE, END_DATE
+from config import N_OMP_THREADS, WORKING_DIR, START_DATE, END_DATE, EVAL_START_DATE
 
 from metrics import compute_metrics, metrics_to_dict
 import plots
@@ -96,8 +96,13 @@ def _set_eval_period(text: str, start: str, end: str) -> str:
 
 
 def write_forward_nml(work: Path) -> None:
-    """Set optimize=.FALSE. and span the full forcing record so gridded output
-    covers whole water years (not just the short calibration window)."""
+    """Set optimize=.FALSE. and evaluate over the calibration window.
+
+    eval_Per spans EVAL_START_DATE..END_DATE (not START_DATE): with a warm-up,
+    START_DATE is the spin-up start and warming_Days already draws that lead-in
+    forcing before EVAL_START_DATE. Using START_DATE here would push the sim
+    period a warm-up length before the forcing record, so mHM rejects it
+    ("time period of input data not matching modelling period")."""
     nml = work / "mhm.nml"
     if not nml.exists():
         raise FileNotFoundError(f"Missing {nml}. Run mod19 to assemble it first.")
@@ -113,11 +118,11 @@ def write_forward_nml(work: Path) -> None:
     if n == 0 and not re.search(r"^\s*optimize\s*=\s*\.FALSE\.", text,
                                 re.MULTILINE | re.IGNORECASE):
         raise ValueError(f"Could not find an 'optimize' switch in {nml}.")
-    new_text = _set_eval_period(new_text, START_DATE, END_DATE)
+    new_text = _set_eval_period(new_text, EVAL_START_DATE, END_DATE)
     new_text = _extend_lcover_start(new_text, START_DATE)
     nml.write_text(new_text)
     log.info("Forward-mode namelist ready (optimize=.FALSE., eval_Per=%s..%s): %s",
-             START_DATE, END_DATE, nml)
+             EVAL_START_DATE, END_DATE, nml)
 
 
 def _extend_lcover_start(text: str, start: str) -> str:
@@ -175,7 +180,13 @@ def run_mhm(work: Path) -> None:
     for line in proc.stdout:
         log.info("[mhm] %s", line.rstrip())
     proc.wait()
-    if proc.returncode != 0:
+    # mHM can crash in its at-exit cleanup (SIGSEGV/SIGABRT, negative code) AFTER
+    # writing all outputs; the caller validates the flux file, so only a real STOP
+    # error (positive exit code) should abort here.
+    if proc.returncode < 0:
+        log.warning("mHM terminated by signal %d after finishing; continuing "
+                    "(outputs are validated next).", -proc.returncode)
+    elif proc.returncode != 0:
         raise RuntimeError(f"mHM exited with code {proc.returncode}.")
 
 
@@ -240,6 +251,7 @@ def main() -> None:
     flux_nc = out_dir / FLUX_FILE
 
     if args.skip_run:
+    # if True:
         if not flux_nc.exists():
             raise FileNotFoundError(
                 f"--skip-run set but {flux_nc} is missing; run without it first.")

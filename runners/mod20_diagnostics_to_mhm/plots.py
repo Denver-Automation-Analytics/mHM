@@ -134,26 +134,44 @@ def plot_partition(flux: Dict, inp: Dict, out_png: Path) -> None:
     plt.close(fig)
 
 
-def plot_hydrographs(disch: Dict, dstats: List[Dict], out_png: Path) -> None:
-    """Simulated vs. observed discharge timeseries, one panel per gauge."""
+def plot_hydrographs(disch: Dict, dstats: List[Dict], inp: Dict, out_png: Path) -> None:
+    """Simulated vs. observed discharge per gauge, with the domain-total daily
+    precipitation volume drawn as inverted bars (hyetograph) on a secondary axis."""
     gauges = disch["gauges"]
     stat_by_site = {s["site_no"]: s for s in (dstats or [])}
+    # Domain-total daily precip volume = areal-mean depth x domain area (Mm3/day).
+    dx = abs(float(inp["x"][1] - inp["x"][0]))
+    dy = abs(float(inp["y"][1] - inp["y"][0]))
+    area_m2 = int(np.asarray(inp["mask"]).sum()) * dx * dy
+    p_t = inp["time"]
+    p_v = np.asarray(inp["series"]["pre"], float) * 1e-3 * area_m2 / 1e6
+    p_max = float(np.nanmax(p_v)) if len(p_v) else 1.0
     n = len(gauges)
-    fig, axes = plt.subplots(n, 1, figsize=(11, 2.6 * n), sharex=True, squeeze=False)
+    fig, axes = plt.subplots(n, 1, figsize=(11, 2.8 * n), sharex=True, squeeze=False)
     for ax, g in zip(axes[:, 0], gauges):
+        # Precip volume as bars hanging from the top on an inverted twin axis.
+        axp = ax.twinx()
+        axp.bar(p_t, p_v, width=1.0, color="#6baed6", alpha=0.6, linewidth=0, zorder=1)
+        axp.set_ylim(p_max * 2.6, 0.0)   # invert: 0 at top so bars occupy the upper third
+        axp.set_ylabel("domain precip [Mm³/day]", fontsize=8, color="#3d6d99")
+        axp.tick_params(labelsize=7, colors="#3d6d99")
+        # Draw discharge lines above the bars (transparent primary axis on top).
+        ax.set_zorder(axp.get_zorder() + 1)
+        ax.patch.set_visible(False)
         t = g["time"]
-        ax.plot(t, g["qobs"], color="k", lw=1.0, label="observed")
-        ax.plot(t, g["qsim"], color="#4c72b0", lw=1.0, alpha=0.85, label="simulated")
+        ax.plot(t, g["qobs"], color="k", lw=1.0, label="observed", zorder=3)
+        ax.plot(t, g["qsim"], color="#c44e52", lw=1.0, alpha=0.9, label="simulated", zorder=3)
         st = stat_by_site.get(g["site_no"], {})
         skill = ""
         if st.get("kge") is not None:
             skill = f"  KGE={st['kge']:.2f}  NSE={st.get('nse', float('nan')):.2f}  PBIAS={st.get('pbias_pct', float('nan')):.0f}%"
         ax.set_title(f"{g['site_no']} — {g['name']}{skill}", fontsize=9)
         ax.set_ylabel("Q [m³/s]", fontsize=8)
+        ax.set_ylim(bottom=0.0)
         ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7, ncol=2)
+        ax.legend(fontsize=7, ncol=2, loc="upper right")
     axes[-1, 0].set_xlabel("date")
-    fig.suptitle("Hydrographs: simulated vs. observed discharge", fontsize=11)
+    fig.suptitle("Hydrographs with domain-total precipitation forcing", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     fig.savefig(out_png, dpi=120)
     plt.close(fig)
@@ -286,7 +304,7 @@ def write_all(flux: Dict, inp: Dict, metrics: List[Metric], out_dir: Path,
         ("precip_partition.png", lambda p: plot_partition(flux, inp, p)),
     ]
     if disch is not None:
-        renderers.append(("hydrographs.png", lambda p: plot_hydrographs(disch, dstats, p)))
+        renderers.append(("hydrographs.png", lambda p: plot_hydrographs(disch, dstats, inp, p)))
         renderers.append(("flow_duration.png", lambda p: plot_flow_duration(disch, p)))
     if terr is not None:
         renderers.append(("terrain_maps.png", lambda p: plot_terrain(terr, tstats or {}, p)))

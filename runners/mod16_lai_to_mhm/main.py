@@ -12,6 +12,8 @@ from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import L0_CELL_SIZE_M, OUTPUT_CRS, START_DATE, END_DATE, WORKING_DIR
+START_DATE = "2023-01-01"
+END_DATE = "2024-12-31"
 
 from acquire_modis_lai import acquire_lai_map
 from writers import write_lai_nc

@@ -22,10 +22,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (DOMAIN_FILE, OUTPUT_CRS, TIMESTEP, WORKING_DIR,
+from config import (OUTPUT_CRS, TIMESTEP, WORKING_DIR,
                     TRITON_CONST_MANN, TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME,
-                    TRITON_EXTBC_SEG_LEN_M, TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
-                    TRITON_OUT_DIR, TRITON_PRINT_INTERVAL_S, TRITON_PROJECTION)
+                    TRITON_END_DATE, TRITON_EXTBC_SEG_LEN_M, TRITON_EXTBC_TYPE,
+                    TRITON_EXTBC_VALUE, TRITON_MANN_SOURCE, TRITON_OUT_DIR,
+                    TRITON_PRINT_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE)
 
 import grid as gridmod
 import readers
@@ -38,6 +39,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("mhm_to_triton")
 
+WATERSHED_FILE = os.path.join(WORKING_DIR, "input", "domain", "watershed.geojson")
+if not os.path.exists(WATERSHED_FILE):
+    raise FileNotFoundError(f"Watershed file not found: {WATERSHED_FILE}. Run mod10 first to generate it.")
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate TRITON inputs from mHM/mRM data.")
@@ -46,6 +50,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--name", default=TRITON_DOMAIN_NAME, help="basename for the TRITON files")
     p.add_argument("--cellsize", type=float, default=TRITON_DEM_CELLSIZE_M, help="TRITON grid resolution [m]")
     p.add_argument("--timestep", default=TIMESTEP, choices=["daily", "hourly"], help="mHM output cadence")
+    p.add_argument("--start-date", default=TRITON_START_DATE, help="event-window start 'YYYY-MM-DD' (subset the runoff)")
+    p.add_argument("--end-date", default=TRITON_END_DATE, help="event-window end 'YYYY-MM-DD' (inclusive)")
+    p.add_argument("--force", action="store_true", help="regenerate outputs even if they already exist")
     return p.parse_args()
 
 
@@ -65,44 +72,75 @@ def main() -> int:
             log.error("Required input missing: %s", pth)
             return 1
 
-    paths = {k: out / f"{name}.{k}" for k in ("dem", "rmap", "roff", "extbc", "obs", "cfg")}
-    names = {"domain": name, **{k: f"{name}.{k}" for k in ("dem", "rmap", "roff", "extbc", "obs")}}
+    keys = ("dem", "rmap", "roff", "extbc", "obs", "mann", "cfg")
+    paths = {k: out / f"{name}.{k}" for k in keys}
+    names = {"domain": name, **{k: f"{name}.{k}" for k in keys if k != "cfg"}}
+
+    def skip(key: str) -> bool:
+        p = paths[key]
+        if p.exists() and p.stat().st_size > 0 and not args.force:
+            log.info("Skip (exists): %s", p.name)
+            return True
+        return False
 
     step_h = readers.step_hours(args.timestep)
     log.info("Reading mHM runoff cube: %s", flux_nc)
-    runoff = readers.read_runoff(flux_nc)
-    log.info("Runoff units=%r, %d steps, L1 %dx%d @ %.0f m",
+    runoff = readers.read_runoff(flux_nc, start=args.start_date, end=args.end_date)
+    log.info("Runoff units=%r, %d steps (%s..%s), L1 %dx%d @ %.0f m",
              runoff["units"], runoff["time"].size,
+             str(runoff["time"][0])[:10], str(runoff["time"][-1])[:10],
              runoff["easting"].size, runoff["northing"].size, runoff["cellsize"])
 
-    log.info("Reprojecting/clipping DEM to %s @ %.0f m", OUTPUT_CRS, args.cellsize)
     warped_tif = out / f"{name}_dem_{OUTPUT_CRS.split(':')[-1]}.tif"
-    dem_grid = gridmod.warp_dem(src_dem, Path(DOMAIN_FILE), OUTPUT_CRS, args.cellsize, warped_tif)
+    if warped_tif.exists() and not args.force:
+        log.info("Reusing warped DEM: %s", warped_tif.name)
+        dem_grid = gridmod.read_grid(warped_tif)
+    else:
+        log.info("Reprojecting/clipping DEM to %s @ %.0f m", OUTPUT_CRS, args.cellsize)
+        dem_grid = gridmod.warp_dem(src_dem, Path(WATERSHED_FILE), OUTPUT_CRS, args.cellsize, warped_tif)
     log.info("TRITON grid: %d x %d = %.1fM cells @ %.0f m",
              dem_grid["ncols"], dem_grid["nrows"],
              dem_grid["ncols"] * dem_grid["nrows"] / 1e6, dem_grid["cellsize"])
 
     zone_ids, valid, n_zones = gridmod.build_zones(runoff)
     ix1, iy1 = gridmod.dem_axis_to_l1(dem_grid, runoff)
+    n_rows = runoff["time"].size
     log.info("Runoff zones (num_runoffs): %d", n_zones)
 
-    log.info("Writing DEM + runoff map ...")
-    writers.write_dem_and_rmap(dem_grid, zone_ids, ix1, iy1, paths["dem"], paths["rmap"])
-    log.info("Writing runoff time series ...")
-    n_rows = writers.write_roff(runoff, valid, step_h, paths["roff"])
+    if not (skip("dem") and skip("rmap")):
+        log.info("Writing DEM + runoff map ...")
+        writers.write_dem_and_rmap(dem_grid, zone_ids, ix1, iy1, paths["dem"], paths["rmap"])
+
+    if not skip("roff"):
+        log.info("Writing runoff time series ...")
+        n_rows = writers.write_roff(runoff, valid, step_h, paths["roff"])
 
     outlet = readers.find_outlet(facc_nc)
     log.info("Outlet (max facc) at x=%.1f y=%.1f", *outlet)
-    num_extbc = writers.write_extbc(dem_grid, outlet, TRITON_EXTBC_TYPE,
-                                    TRITON_EXTBC_VALUE, TRITON_EXTBC_SEG_LEN_M, paths["extbc"])
+    num_extbc = 1
+    if not skip("extbc"):
+        num_extbc = writers.write_extbc(dem_grid, outlet, TRITON_EXTBC_TYPE,
+                                        TRITON_EXTBC_VALUE, TRITON_EXTBC_SEG_LEN_M, paths["extbc"])
 
     gauges = readers.read_gauges(id_map)
-    n_obs = writers.write_obs(gauges, paths["obs"])
-    log.info("Wrote %d observation point(s)", n_obs)
+    n_obs = len(gauges)
+    if not skip("obs"):
+        n_obs = writers.write_obs(gauges, paths["obs"])
+    log.info("Observation point(s): %d", n_obs)
+
+    if not skip("mann"):
+        log.info("Generating Manning field from %s", TRITON_MANN_SOURCE)
+        lut, nod = readers.read_manning_lookup(Path(TRITON_MANN_SOURCE))
+        lc_tif = out / f"{name}_lc_{OUTPUT_CRS.split(':')[-1]}.tif"
+        gridmod.warp_to_dem_grid(Path(TRITON_MANN_SOURCE), Path(WATERSHED_FILE), OUTPUT_CRS,
+                                 dem_grid, lc_tif, resample="near",
+                                 dst_nodata=nod if nod is not None else -128)
+        writers.write_mann(lc_tif, dem_grid, lut, TRITON_CONST_MANN, nod, paths["mann"])
 
     sim_duration_s = int(n_rows * step_h * 3600)
-    writers.write_cfg(paths["cfg"], names, TRITON_PROJECTION, n_zones, n_rows,
-                      num_extbc, sim_duration_s, TRITON_PRINT_INTERVAL_S, TRITON_CONST_MANN)
+    if not skip("cfg"):
+        writers.write_cfg(paths["cfg"], names, TRITON_PROJECTION, n_zones, n_rows,
+                          num_extbc, sim_duration_s, TRITON_PRINT_INTERVAL_S, TRITON_CONST_MANN)
 
     # cross-file consistency checks
     assert n_zones == int(zone_ids.max()), "zone id range does not match num_runoffs"

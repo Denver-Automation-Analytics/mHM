@@ -137,7 +137,7 @@ def header_to_latlon(header: HeaderLike,
 # --------------------------------------------------------------------------- #
 # NetCDF writing
 # --------------------------------------------------------------------------- #
-_CHUNK_ROWS = 512   # rows per batch; keeps peak memory ~400 MB at 3-km resolution
+_CHUNK_ROWS = 32   # rows per batch; keeps peak memory ~400 MB at 3-km resolution
 
 
 def _write_level(fh: nc.Dataset,

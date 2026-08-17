@@ -39,8 +39,7 @@ def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
 
     ny1, nx1 = zone_ids.shape
     with open(dem_path, "w") as fd, open(rmap_path, "w") as fr:
-        fd.write(header)
-        fr.write(header)
+        fd.write(header)  # only the DEM carries the ESRI header; .rmap is a bare grid
         for j in range(nrows):
             row = band.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
             valid = row != NODATA
@@ -79,6 +78,35 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
                 vals = ",".join(np.char.mod("%.6g", block[k]).tolist())
                 f.write(f"{t},{vals}\n")
     return nt
+
+
+def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
+               const_mann: float, nodata_lc, mann_path: Path) -> None:
+    """Write the per-cell Manning grid [-] aligned to the DEM (headerless).
+
+    Land-cover codes on the DEM grid are mapped to their RAT roughness; nodata
+    or unmapped cells fall back to *const_mann*.
+    """
+    ds = gdal.Open(str(lc_tif))
+    band = ds.GetRasterBand(1)
+    ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
+    maxcode = max(c for c in lut if c >= 0)
+    table = np.full(maxcode + 1, const_mann, dtype=np.float64)
+    for code, nval in lut.items():
+        if 0 <= code <= maxcode:
+            table[code] = nval
+    nod = None if nodata_lc is None else int(nodata_lc)
+    with open(mann_path, "w") as f:
+        for j in range(nrows):
+            row = band.ReadAsArray(0, j, ncols, 1)[0].astype(np.int64)
+            out = np.full(ncols, const_mann, dtype=np.float64)
+            m = (row >= 0) & (row <= maxcode)
+            if nod is not None:
+                m &= row != nod
+            out[m] = table[row[m]]
+            f.write(" ".join(np.char.mod("%.4f", out).tolist()))
+            f.write("\n")
+    ds = None
 
 
 def _snap_segment(grid: Dict, outlet: Tuple[float, float],
@@ -139,7 +167,8 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         f'projection="{projection}"',
         "output_option=SEQ",
         "",
-        "# Manning roughness (constant until the .mann file is generated)",
+        "# Manning roughness field from land cover (const_mann is the fallback)",
+        f'n_infile="{rel("mann")}"',
         f"const_mann={const_mann}",
         "",
         "# Hydrograph point sources are not used in this coupling",
