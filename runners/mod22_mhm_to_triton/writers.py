@@ -38,9 +38,10 @@ def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
     ncols, nrows, cs = grid["ncols"], grid["nrows"], grid["cellsize"]
     xll = grid["x0"]
     yll = grid["y0"] - nrows * cs
-    header = (f"ncols\t{ncols}\nnrows\t{nrows}\n"
-              f"xllcorner\t{xll}\nyllcorner\t{yll}\n"
-              f"cellsize\t{cs}\nNODATA_value\t{NODATA}\n")
+    # space-separated header: TRITON's ASCII parser splits on spaces, not tabs
+    header = (f"ncols {ncols}\nnrows {nrows}\n"
+              f"xllcorner {xll}\nyllcorner {yll}\n"
+              f"cellsize {cs}\nNODATA_value {NODATA}\n")
 
     ny1, nx1 = zone_ids.shape
     with open(dem_path, "w") as fd, open(rmap_path, "w") as fr:
@@ -291,7 +292,7 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         f'dem_filename="{rel("dem")}"',
         f'output_folder="output/{names["domain"]}/"',
         "input_format=ASC",
-        "output_format=ASC",
+        "output_format=GTIFF",
         'outfile_pattern="%s/%s/%s_%02d_%02d"',
         f'projection="{projection}"',
         "output_option=PAR",
@@ -328,7 +329,7 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         "domain_decomposition=dynamic",
         "factor_interval_domain_decomposition=10",
         "open_boundaries=1",
-        "print_option=h",
+        "print_option=huv",
         "max_value_print_option=h",
         "sim_start_time=0",
         f"sim_duration={sim_duration_s}",
