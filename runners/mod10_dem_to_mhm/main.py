@@ -245,6 +245,24 @@ def _remap_fdir_to_arcgis(fdir_nc: str) -> None:
         ds['fdir'][:] = out
 
 
+def _write_fdir_arcgis(src_tif: str, dst_tif: str) -> None:
+    """Copy an overflow 0-7 D8 flow-direction raster to ArcGIS powers-of-2 codes.
+
+    Written block-wise so full-resolution grids never load fully into memory;
+    overflow's undefined code 8 becomes 0 (outlet).
+    """
+    with rasterio.open(src_tif) as s:
+        profile = s.profile
+        with rasterio.open(dst_tif, "w", **profile) as d:
+            for _, win in s.block_windows(1):
+                a = s.read(1, window=win)
+                out = a.copy()
+                for src, dst in _OVERFLOW_TO_ARCGIS.items():
+                    out[a == src] = dst
+                out[a == 8] = 0
+                d.write(out, 1, window=win)
+
+
 def _delineate_and_mask_watershed(l0_dir: str, morph_dir: str,
                                   buffer_m: float, domain_out: str) -> None:
     """Delineate the true basin upstream of the max-facc outlet with overflow,
@@ -348,6 +366,22 @@ def main():
                            f"{DEM_DIR}/dem_corrected.tif",
                            "aspect")
 
+    # 3b. Full-resolution flow direction & accumulation for downstream hydraulic
+    # coupling (mod22). dem_corrected is already breach+filled, so route directly.
+    # facc is accumulated on overflow's 0-7 codes; fdir.tif is the ArcGIS-coded copy.
+    print("Deriving full-resolution flow direction and accumulation...")
+    fdir_raw = f"{DEM_DIR}/fdir_raw.tif"
+    fdir_d8 = f"{DEM_DIR}/fdir_d8.tif"
+    if not os.path.exists(fdir_raw):
+        overflow.flow_direction(f"{DEM_DIR}/dem_corrected.tif", fdir_raw, chunk_size=CHUNK_SIZE)
+    if not os.path.exists(fdir_d8):
+        overflow.fix_flats_tiled(f"{DEM_DIR}/dem_corrected.tif", fdir_raw, fdir_d8,
+                                 chunk_size=CHUNK_SIZE, working_dir=DEM_DIR)
+    if not os.path.exists(f"{DEM_DIR}/facc.tif"):
+        overflow.flow_accumulation_tiled(fdir_d8, f"{DEM_DIR}/facc.tif", chunk_size=CHUNK_SIZE)
+    if not os.path.exists(f"{DEM_DIR}/fdir.tif"):
+        _write_fdir_arcgis(fdir_d8, f"{DEM_DIR}/fdir.tif")
+
     # 4. Resample terrain derivatives to L0 grid
     print("Resampling terrain derivatives to L0 grid...")
     xmin, ymin, xmax, ymax, cellsize, crs_wkt = _build_l0_grid_from_domain(
@@ -413,7 +447,7 @@ if __name__ == "__main__":
     # ---- USER INPUTS --------------------------------------------------
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
-    CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
+    CHUNK_SIZE         = 32       # chunk size for tiled processing (cells)
     DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
     TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
     MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")

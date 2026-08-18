@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 import tempfile
 from pathlib import Path
 from typing import Dict, Tuple
 
 import geopandas as gpd
 import numpy as np
-from osgeo import gdal
+import xarray as xr
+from osgeo import gdal, osr
 from shapely.geometry import MultiPolygon, Polygon
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -114,6 +116,61 @@ def warp_to_dem_grid(src_tif: Path, domain_file: Path, dst_crs: str, dem_grid: D
     finally:
         os.unlink(cutline)
     return Path(out_tif)
+
+
+def nc_to_tif(nc_path: Path, var: str, out_tif: Path, crs: str) -> Path:
+    """Write a single-variable mHM morphology NetCDF (x/y in *crs*) to a GeoTIFF."""
+    ds = xr.open_dataset(nc_path)
+    x = np.asarray(ds["x"].values, dtype=float)
+    y = np.asarray(ds["y"].values, dtype=float)
+    arr = np.asarray(ds[var].values, dtype=float)
+    ds.close()
+    dx, dy = float(x[1] - x[0]), float(y[1] - y[0])
+    ny, nx = arr.shape
+    arr = np.where(np.isfinite(arr), arr, NODATA)
+    drv = gdal.GetDriverByName("GTiff")
+    o = drv.Create(str(out_tif), nx, ny, 1, gdal.GDT_Float64)
+    o.SetGeoTransform((x[0] - dx / 2.0, dx, 0.0, y[0] - dy / 2.0, 0.0, dy))
+    srs = osr.SpatialReference(); srs.SetFromUserInput(crs)
+    o.SetProjection(srs.ExportToWkt())
+    band = o.GetRasterBand(1)
+    band.SetNoDataValue(float(NODATA))
+    band.WriteArray(arr)
+    o.FlushCache(); o = None
+    return Path(out_tif)
+
+
+def prepare_field_on_dem_grid(nc_path: Path, var: str, domain_file: Path, dst_crs: str,
+                              dem_grid: Dict, out_tif: Path, resample: str = "near") -> Path:
+    """Rasterize an mHM morphology field and warp it onto the exact DEM grid."""
+    tmp = Path(f"{out_tif}.src.tif")
+    nc_to_tif(nc_path, var, tmp, dst_crs)
+    try:
+        warp_to_dem_grid(tmp, domain_file, dst_crs, dem_grid, out_tif,
+                         resample=resample, dst_nodata=NODATA)
+    finally:
+        if tmp.exists():
+            os.unlink(tmp)
+    return Path(out_tif)
+
+
+def pixel_area_m2(tif: Path) -> float:
+    """Area [m2] of one source pixel; handles projected and geographic rasters.
+
+    Flow-accumulation counts upstream cells, so drainage area = count x this.
+    """
+    ds = gdal.Open(str(tif))
+    gt = ds.GetGeoTransform()
+    ny = ds.RasterYSize
+    srs = osr.SpatialReference()
+    srs.ImportFromWkt(ds.GetProjection())
+    ds = None
+    if srs.IsProjected():
+        return abs(gt[1] * gt[5])
+    cy = gt[3] + (ny / 2.0) * gt[5]  # mean latitude of the raster
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = 111320.0 * math.cos(math.radians(cy))
+    return abs(gt[1]) * m_per_deg_lon * abs(gt[5]) * m_per_deg_lat
 
 
 def build_zones(runoff: Dict) -> Tuple[np.ndarray, np.ndarray, int]:

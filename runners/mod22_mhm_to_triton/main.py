@@ -22,11 +22,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (OUTPUT_CRS, TIMESTEP, WORKING_DIR,
-                    TRITON_CONST_MANN, TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME,
-                    TRITON_END_DATE, TRITON_EXTBC_SEG_LEN_M, TRITON_EXTBC_TYPE,
-                    TRITON_EXTBC_VALUE, TRITON_MANN_SOURCE, TRITON_OUT_DIR,
-                    TRITON_PRINT_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE)
+from config import (NODATA, OUTPUT_CRS, TIMESTEP, WORKING_DIR,
+                    TRITON_BF_CHANNEL_KM2, TRITON_BF_SLOPE_MIN, TRITON_BF_WIDTH_A,
+                    TRITON_BF_WIDTH_B, TRITON_CONST_MANN, TRITON_DEM_CELLSIZE_M,
+                    TRITON_DOMAIN_NAME, TRITON_END_DATE, TRITON_EXTBC_SEG_LEN_M,
+                    TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE, TRITON_INITH,
+                    TRITON_MANN_SOURCE, TRITON_OUT_DIR, TRITON_PRINT_INTERVAL_S,
+                    TRITON_PROJECTION, TRITON_START_DATE)
+
+from osgeo import gdal
 
 import grid as gridmod
 import readers
@@ -72,9 +76,10 @@ def main() -> int:
             log.error("Required input missing: %s", pth)
             return 1
 
-    keys = ("dem", "rmap", "roff", "extbc", "obs", "mann", "cfg")
+    keys = ("dem", "rmap", "roff", "extbc", "obs", "mann", "inith", "initqx", "inityq", "cfg")
     paths = {k: out / f"{name}.{k}" for k in keys}
     names = {"domain": name, **{k: f"{name}.{k}" for k in keys if k != "cfg"}}
+    epsg = OUTPUT_CRS.split(":")[-1]
 
     def skip(key: str) -> bool:
         p = paths[key]
@@ -91,7 +96,7 @@ def main() -> int:
              str(runoff["time"][0])[:10], str(runoff["time"][-1])[:10],
              runoff["easting"].size, runoff["northing"].size, runoff["cellsize"])
 
-    warped_tif = out / f"{name}_dem_{OUTPUT_CRS.split(':')[-1]}.tif"
+    warped_tif = out / f"{name}_dem_{epsg}.tif"
     if warped_tif.exists() and not args.force:
         log.info("Reusing warped DEM: %s", warped_tif.name)
         dem_grid = gridmod.read_grid(warped_tif)
@@ -128,19 +133,75 @@ def main() -> int:
         n_obs = writers.write_obs(gauges, paths["obs"])
     log.info("Observation point(s): %d", n_obs)
 
+    lc_cache: dict = {}
+
+    def ensure_lc() -> dict:
+        """Warp the land-cover raster onto the DEM grid once; cache lut + tif."""
+        if not lc_cache:
+            lut, nod = readers.read_manning_lookup(Path(TRITON_MANN_SOURCE))
+            lc_tif = out / f"{name}_lc_{epsg}.tif"
+            if not lc_tif.exists() or args.force:
+                gridmod.warp_to_dem_grid(Path(TRITON_MANN_SOURCE), Path(WATERSHED_FILE),
+                                         OUTPUT_CRS, dem_grid, lc_tif, resample="near",
+                                         dst_nodata=nod if nod is not None else -128)
+            lc_cache.update(lut=lut, nod=nod, tif=lc_tif)
+        return lc_cache
+
     if not skip("mann"):
         log.info("Generating Manning field from %s", TRITON_MANN_SOURCE)
-        lut, nod = readers.read_manning_lookup(Path(TRITON_MANN_SOURCE))
-        lc_tif = out / f"{name}_lc_{OUTPUT_CRS.split(':')[-1]}.tif"
-        gridmod.warp_to_dem_grid(Path(TRITON_MANN_SOURCE), Path(WATERSHED_FILE), OUTPUT_CRS,
-                                 dem_grid, lc_tif, resample="near",
-                                 dst_nodata=nod if nod is not None else -128)
-        writers.write_mann(lc_tif, dem_grid, lut, TRITON_CONST_MANN, nod, paths["mann"])
+        lc = ensure_lc()
+        writers.write_mann(lc["tif"], dem_grid, lc["lut"], TRITON_CONST_MANN, lc["nod"], paths["mann"])
+
+    init_names = None
+    if TRITON_INITH:
+        ic_keys = ("inith", "initqx", "inityq")
+        ic_files = [paths[k] for k in ic_keys] + [Path(f"{paths[k]}.tif") for k in ic_keys]
+        ready = all(p.exists() and p.stat().st_size > 0 for p in ic_files)
+        facc_hi = work / "input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
+        fdir_hi = work / "input" / "dem" / "fdir.tif"
+        if ready and not args.force:
+            for k in ic_keys:
+                log.info("Skip (exists): %s", paths[k].name)
+        else:
+            if not (facc_hi.exists() and fdir_hi.exists()):
+                log.error("Initial conditions require full-resolution routing rasters "
+                          "%s and %s. Run mod10 to generate them.", facc_hi, fdir_hi)
+                return 1
+            log.info("Seeding channels from pre-event baseflow (Method A) ...")
+            lc = ensure_lc()
+            # slope at the TRITON resolution, derived from the reprojected DEM
+            slope_g = out / f"{name}_slope_{epsg}.tif"
+            if not slope_g.exists() or args.force:
+                gdal.DEMProcessing(str(slope_g), str(dem_grid["tif"]), "slope", slopeFormat="degree")
+            log.info("Using full-resolution fdir/facc from input/dem/ (reprojected to the TRITON grid)")
+            cell_area = gridmod.pixel_area_m2(facc_hi)
+            facc_g = gridmod.warp_to_dem_grid(facc_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
+                        dem_grid, out / f"{name}_facc_{epsg}.tif", resample="near", dst_nodata=NODATA)
+            fdir_g = gridmod.warp_to_dem_grid(fdir_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
+                        dem_grid, out / f"{name}_fdir_{epsg}.tif", resample="near", dst_nodata=0)
+            bf = readers.read_baseflow_preevent(flux_nc, start_date=args.start_date)
+            log.info("Pre-event baseflow step: %s | source cell area %.1f m2", str(bf["time"])[:16], cell_area)
+            ic = writers.write_initial_conditions(
+                dem_grid, facc_g, Path(slope_g), fdir_g, lc["tif"], lc["lut"], TRITON_CONST_MANN,
+                bf["rate"], ix1, iy1, cell_area, TRITON_BF_CHANNEL_KM2,
+                TRITON_BF_WIDTH_A, TRITON_BF_WIDTH_B, TRITON_BF_SLOPE_MIN,
+                paths["inith"], paths["initqx"], paths["inityq"])
+            log.info("Initial-condition channel cells: %d", ic["n_chan"])
+            log.info("  depth h [m]      : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
+                     *(ic["depth_m"][s] for s in ("min", "mean", "median", "p90", "max")))
+            log.info("  unit q |q| [m2/s]: min=%.4f mean=%.4f median=%.4f p90=%.4f max=%.4f",
+                     *(ic["unit_q_m2s"][s] for s in ("min", "mean", "median", "p90", "max")))
+            log.info("  velocity [m/s]   : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
+                     *(ic["velocity_ms"][s] for s in ("min", "mean", "median", "p90", "max")))
+            log.info("  GeoTIFFs: %s", ", ".join(t.name for t in ic["tifs"].values()))
+        if all(paths[k].exists() for k in ic_keys):
+            init_names = {"h": names["inith"], "qx": names["initqx"], "qy": names["inityq"]}
 
     sim_duration_s = int(n_rows * step_h * 3600)
     if not skip("cfg"):
         writers.write_cfg(paths["cfg"], names, TRITON_PROJECTION, n_zones, n_rows,
-                          num_extbc, sim_duration_s, TRITON_PRINT_INTERVAL_S, TRITON_CONST_MANN)
+                          num_extbc, sim_duration_s, TRITON_PRINT_INTERVAL_S, TRITON_CONST_MANN,
+                          init_names=init_names)
 
     # cross-file consistency checks
     assert n_zones == int(zone_ids.max()), "zone id range does not match num_runoffs"

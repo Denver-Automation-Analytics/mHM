@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from osgeo import gdal
@@ -18,6 +19,10 @@ from config import NODATA
 
 # Time block used when streaming the runoff cube out to the .roff file.
 _ROFF_TIME_BLOCK = 365
+
+# ESRI D8 codes -> (east, north) unit vectors: +qx = east (increasing col), +qy = north (decreasing row).
+_D8 = {1: (1, 0), 2: (1, -1), 4: (0, -1), 8: (-1, -1),
+       16: (-1, 0), 32: (-1, 1), 64: (0, 1), 128: (1, 1)}
 
 
 def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
@@ -149,12 +154,136 @@ def write_obs(gauges: List[Dict], obs_path: Path) -> int:
     return len(gauges)
 
 
+def _series_stats(a: np.ndarray) -> Dict[str, float]:
+    """min/mean/median/p90/max over a 1-D array (empty -> zeros)."""
+    if a.size == 0:
+        return {"n": 0, "min": 0.0, "mean": 0.0, "median": 0.0, "p90": 0.0, "max": 0.0}
+    return {"n": int(a.size), "min": float(a.min()), "mean": float(a.mean()),
+            "median": float(np.median(a)), "p90": float(np.percentile(a, 90)),
+            "max": float(a.max())}
+
+
+def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
+                             fdir_tif: Path, lc_tif: Path, mann_lut: Dict[int, float],
+                             const_mann: float, qb_rate: np.ndarray,
+                             ix1: np.ndarray, iy1: np.ndarray, l0_cell_area_m2: float,
+                             channel_km2: float, width_a: float, width_b: float,
+                             slope_min: float, h_path: Path, qx_path: Path,
+                             qy_path: Path) -> Dict:
+    """Seed initial depth/discharge in channel cells from mHM baseflow (Method A).
+
+    For every channel cell (drainage area >= *channel_km2*) the accumulated
+    baseflow discharge Q_b = pre-event baseflow rate x drainage area is converted
+    to Manning normal depth h = (n Q_b / (w sqrt(S)))^(3/5), with width
+    w = a A^b. The unit discharge Q_b/w is split along the D8 flow direction into
+    qx/qy so the channel starts already flowing.
+
+    Writes the headerless ASCII grids (aligned to the DEM) plus GeoTIFF mirrors
+    for inspection, and returns the channel-cell count, the GeoTIFF paths, and
+    depth/unit-discharge/velocity statistics over the channel cells.
+    """
+    dsf = gdal.Open(str(facc_tif)); bf = dsf.GetRasterBand(1)
+    dss = gdal.Open(str(slope_tif)); bs = dss.GetRasterBand(1)
+    dsd = gdal.Open(str(fdir_tif)); bd = dsd.GetRasterBand(1)
+    dsl = gdal.Open(str(lc_tif)); bl = dsl.GetRasterBand(1)
+    ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
+
+    maxcode = max(c for c in mann_lut if c >= 0)
+    ntab = np.full(maxcode + 1, const_mann, dtype=np.float64)
+    for code, nval in mann_lut.items():
+        if 0 <= code <= maxcode:
+            ntab[code] = nval
+    d8x = np.zeros(129, dtype=np.float64)
+    d8y = np.zeros(129, dtype=np.float64)
+    for code, (ux, uy) in _D8.items():
+        norm = math.hypot(ux, uy)
+        d8x[code], d8y[code] = ux / norm, uy / norm
+
+    # GeoTIFF mirrors aligned to the DEM grid, for manual inspection (0 = dry/off-channel)
+    prj = gdal.Open(str(dem_grid["tif"])).GetProjection()
+    cs = dem_grid["cellsize"]
+    gt = (dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs)
+    drv = gdal.GetDriverByName("GTiff")
+    co = ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"]
+    tifs = {"h": Path(f"{h_path}.tif"), "qx": Path(f"{qx_path}.tif"), "qy": Path(f"{qy_path}.tif")}
+
+    def _new_tif(path: Path):
+        d = drv.Create(str(path), ncols, nrows, 1, gdal.GDT_Float32, co)
+        d.SetGeoTransform(gt); d.SetProjection(prj)
+        d.GetRasterBand(1).SetNoDataValue(0.0)
+        return d
+
+    th, tqx, tqy = _new_tif(tifs["h"]), _new_tif(tifs["qx"]), _new_tif(tifs["qy"])
+    bth, btqx, btqy = th.GetRasterBand(1), tqx.GetRasterBand(1), tqy.GetRasterBand(1)
+
+    h_vals, q_vals, v_vals = [], [], []
+    n_chan = 0
+    with open(h_path, "w") as fh, open(qx_path, "w") as fqx, open(qy_path, "w") as fqy:
+        for j in range(nrows):
+            facc = bf.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
+            slope = bs.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
+            fdir = bd.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
+            lc = bl.ReadAsArray(0, j, ncols, 1)[0].astype(np.int64)
+            h = np.zeros(ncols, dtype=np.float64)
+            qx = np.zeros(ncols, dtype=np.float64)
+            qy = np.zeros(ncols, dtype=np.float64)
+
+            a_m2 = facc * l0_cell_area_m2
+            a_km2 = a_m2 / 1e6
+            qbrow = np.zeros(ncols, dtype=np.float64)
+            jy = iy1[j]
+            if jy >= 0:
+                ok = ix1 >= 0
+                qbrow[ok] = qb_rate[jy, ix1[ok]]
+
+            chan = (facc > NODATA + 1) & (slope > NODATA + 1) & (a_km2 >= channel_km2) & (qbrow > 0)
+            if chan.any():
+                qb = qbrow[chan] * a_m2[chan]                      # m3 s-1
+                w = np.maximum(width_a * np.power(a_km2[chan], width_b), 1e-3)
+                s = np.maximum(np.tan(np.radians(slope[chan])), slope_min)
+                nch = ntab[np.clip(lc[chan], 0, maxcode)]
+                hc = np.power(nch * qb / (w * np.sqrt(s)), 0.6)
+                q_unit = qb / w                                    # m2 s-1
+                code = np.clip(fdir[chan].astype(np.int64), 0, 128)
+                h[chan] = hc
+                qx[chan] = q_unit * d8x[code]
+                qy[chan] = q_unit * d8y[code]
+                n_chan += int(chan.sum())
+                h_vals.append(hc)
+                q_vals.append(q_unit)
+                v_vals.append(q_unit / np.maximum(hc, 1e-9))       # m s-1
+
+            fh.write(" ".join(np.char.mod("%.4f", h).tolist())); fh.write("\n")
+            fqx.write(" ".join(np.char.mod("%.6g", qx).tolist())); fqx.write("\n")
+            fqy.write(" ".join(np.char.mod("%.6g", qy).tolist())); fqy.write("\n")
+            bth.WriteArray(h.reshape(1, -1).astype(np.float32), 0, j)
+            btqx.WriteArray(qx.reshape(1, -1).astype(np.float32), 0, j)
+            btqy.WriteArray(qy.reshape(1, -1).astype(np.float32), 0, j)
+    for d in (th, tqx, tqy):
+        d.FlushCache()
+    th = tqx = tqy = None
+    dsf = dss = dsd = dsl = None
+
+    cat = lambda parts: np.concatenate(parts) if parts else np.zeros(0)
+    return {
+        "n_chan": n_chan,
+        "tifs": tifs,
+        "depth_m": _series_stats(cat(h_vals)),
+        "unit_q_m2s": _series_stats(cat(q_vals)),
+        "velocity_ms": _series_stats(cat(v_vals)),
+    }
+
+
 def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
               num_runoffs: int, runoff_rows: int, num_extbc: int,
               sim_duration_s: int, print_interval_s: int,
-              const_mann: float) -> None:
+              const_mann: float, init_names: Optional[Dict[str, str]] = None) -> None:
     """Write the TRITON configuration tying the generated inputs together."""
     rel = lambda key: f"input/{names['domain']}/{names[key]}"
+    ic = init_names or {}
+    h_file = f"input/{names['domain']}/{ic['h']}" if ic.get("h") else ""
+    qx_file = f"input/{names['domain']}/{ic['qx']}" if ic.get("qx") else ""
+    qy_file = f"input/{names['domain']}/{ic['qy']}" if ic.get("qy") else ""
     lines = [
         "#---------------------------------------------------------------------------",
         "# TRITON config file (generated by mod22_mhm_to_triton)",
@@ -165,7 +294,7 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         "output_format=ASC",
         'outfile_pattern="%s/%s/%s_%02d_%02d"',
         f'projection="{projection}"',
-        "output_option=SEQ",
+        "output_option=PAR",
         "",
         "# Manning roughness field from land cover (const_mann is the fallback)",
         f'n_infile="{rel("mann")}"',
@@ -189,13 +318,22 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         "time_series_flag=1",
         f'observation_loc_file="{rel("obs")}"',
         "",
+        "# Initial conditions (mHM pre-event baseflow warm start)",
+        f'h_infile="{h_file}"',
+        f'qx_infile="{qx_file}"',
+        f'qy_infile="{qy_file}"',
+        "",
+        "it_count=0",
+        "gpu_direct_flag=1",
+        "domain_decomposition=dynamic",
+        "factor_interval_domain_decomposition=10",
+        "open_boundaries=1",
         "print_option=h",
         "max_value_print_option=h",
         "sim_start_time=0",
         f"sim_duration={sim_duration_s}",
         "checkpoint_id=0",
         "time_increment_fixed=0",
-        "time_step=0.01",
         f"print_interval={print_interval_s}",
         "courant=0.5",
         "hextra=0.001",

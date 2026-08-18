@@ -9,6 +9,7 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+_CHUNK_SIZE = 32
 
 def write_asc(path: Path, header: dict, grid: np.ndarray, nodata: int) -> None:
     """Six-line header + row-major integer grid, north-up (row 0 = northernmost)."""
@@ -72,7 +73,7 @@ def write_nc(path: Path, header: dict, grid: np.ndarray, nodata: int,
         dv = ds.createVariable("idgauges", "i4", ("x", "y"),
                                fill_value=np.int32(nodata),
                                zlib=True, complevel=4,
-                               chunksizes=(256, 256))
+                               chunksizes=(_CHUNK_SIZE, _CHUNK_SIZE))
         dv.coordinates = "x y"
         for row_start in range(0, nrows, block_size):
             row_count = min(block_size, nrows - row_start)

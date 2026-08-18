@@ -32,10 +32,12 @@ from metrics import compute_metrics, metrics_to_dict
 import plots
 import stats
 from readers import (read_fluxes, read_inputs, resolve_window,
-                     read_discharge, read_terrain, read_parameters)
+                     read_discharge, read_discharge_from_qrouted, read_terrain,
+                     read_parameters)
 
 MHM_BINARY = "/workspace/build/mhm"
 FLUX_FILE = "mHM_Fluxes_States.nc"
+MRM_FLUX_FILE = "mRM_Fluxes_States.nc"
 
 # outputFlxState cases the diagnostics read (mo_write_fluxes_states.f90):
 #   9=PET, 10=aET, 11=Q(total runoff), 15=QB(baseflow), 16=recharge, 20=preEffect
@@ -163,6 +165,25 @@ def write_minimal_outputs_nml(work: Path) -> None:
              len(wanted), ", ".join(map(str, sorted(wanted))))
 
 
+def _set_mrm_output_timestep(work: Path, ts: int = 1) -> None:
+    """Set the mRM gridded-output cadence so Qrouted is written at the model step.
+
+    Hourly Qrouted lets mod20 recover the gauge hydrograph from mRM_Fluxes_States.nc
+    when mHM's at-exit crash truncates discharge.nc.
+    """
+    nml = work / "mrm_outputs.nml"
+    if not nml.exists():
+        raise FileNotFoundError(f"Missing {nml}. Run mod19 to assemble it first.")
+    _backup_once(nml)
+    text = nml.read_text()
+    new_text, n = re.subn(r"^(\s*timeStep_model_outputs_mrm\s*=\s*)-?\d+",
+                          rf"\g<1>{ts}", text, count=1, flags=re.MULTILINE)
+    if n == 0:
+        raise ValueError(f"timeStep_model_outputs_mrm not found in {nml}.")
+    nml.write_text(new_text)
+    log.info("Set timeStep_model_outputs_mrm=%d (hourly Qrouted fallback source).", ts)
+
+
 def run_mhm(work: Path) -> None:
     """Launch the mHM binary in *work* and stream its output to the log."""
     if not Path(MHM_BINARY).exists():
@@ -260,6 +281,7 @@ def main() -> None:
         inject_calibrated_params(work)
         write_forward_nml(work)
         write_minimal_outputs_nml(work)
+        _set_mrm_output_timestep(work, 1)   # hourly Qrouted for the discharge fallback
         # Remove stale gridded outputs so mHM writes fresh files (avoids file locks).
         for stale in (flux_nc, out_dir / "mRM_Fluxes_States.nc"):
             if stale.exists():
@@ -293,10 +315,18 @@ def main() -> None:
         disch_nc = out_dir / "subdaily_discharge.nc"
         if not disch_nc.exists():
             disch_nc = out_dir / "discharge.nc"
-        disch = read_discharge(disch_nc, work / "input/gauge", window)
+        try:
+            disch = read_discharge(disch_nc, work / "input/gauge", window)
+        except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
+            # mHM's at-exit crash can truncate discharge.nc; recover the hydrograph
+            # from the routed-flow grid (written before the crash).
+            log.warning("discharge file unusable (%s); recovering hydrograph from %s.",
+                        exc, MRM_FLUX_FILE)
+            disch = read_discharge_from_qrouted(out_dir / MRM_FLUX_FILE,
+                                                work / "input/gauge", window)
         dstats = stats.discharge_stats(disch)
         _print_hydro_summary(dstats)
-    except (FileNotFoundError, ValueError, KeyError) as exc:
+    except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
         log.warning("Hydrograph diagnostics skipped: %s", exc)
     try:
         terr = read_terrain(work / "input/morph")

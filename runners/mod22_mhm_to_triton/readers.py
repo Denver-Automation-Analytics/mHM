@@ -131,3 +131,26 @@ def read_manning_lookup(tif: Path, value_col: str = "VALUE",
     nodata = band.GetNoDataValue()
     ds = None  # keep alive until RAT fully read, then release
     return lut, nodata
+
+
+def read_baseflow_preevent(flux_nc: Path, start_date=None,
+                           var: str = "QB") -> Dict:
+    """Return the baseflow rate field [m/s] at the step just before the event.
+
+    Picks the last mHM output step strictly earlier than *start_date* (or the
+    first step if none precede it) so the initial condition reflects pre-event
+    baseflow. The field is aligned to the L1 runoff grid.
+    """
+    ds = xr.open_dataset(flux_nc, decode_times=True)
+    if var not in ds:
+        raise KeyError(f"Baseflow variable {var!r} missing from {flux_nc}.")
+    t = pd.DatetimeIndex(ds[var]["time"].values)
+    if start_date is not None:
+        before = t[t < pd.Timestamp(start_date)]
+        sel = before[-1] if len(before) else t[0]
+    else:
+        sel = t[0]
+    field = np.asarray(ds[var].sel(time=sel).values, dtype=float)  # mm h-1
+    ds.close()
+    field = np.where(np.isfinite(field), field, 0.0)
+    return {"rate": field * 1e-3 / 3600.0, "time": sel}  # -> m s-1

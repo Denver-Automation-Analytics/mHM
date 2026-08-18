@@ -168,6 +168,28 @@ def _apply_resume(param_nml: Path, final_nml: Path) -> None:
     log.info("RESUME: seeded %d parameter start value(s) from %s.", n, final_nml.name)
 
 
+def _strip_finalparam_garbage(final_nml: Path) -> None:
+    """Drop the corrupted trailing block mHM's at-exit crash appends to FinalParam.nml.
+
+    A heap-corruption SIGABRT/SIGSEGV in mHM's cleanup scribbles binary bytes into a
+    throwaway namelist block after all real parameters are written; strip from the first
+    non-printable line onward so the file is clean ASCII.
+    """
+    if not final_nml.exists():
+        return
+    lines = final_nml.read_bytes().decode("latin-1").splitlines()
+    def _garbage(s: str) -> bool:
+        return any(ord(c) < 9 or (13 < ord(c) < 32) or ord(c) > 126 for c in s)
+    cut = next((i for i, l in enumerate(lines) if _garbage(l)), len(lines))
+    if cut == len(lines):
+        return
+    clean = lines[:cut]
+    while clean and clean[-1].strip() == "":
+        clean.pop()
+    final_nml.write_text("\n".join(clean) + "\n")
+    log.info("Stripped %d corrupted trailing line(s) from %s.", len(lines) - cut, final_nml.name)
+
+
 def _write_mhm_outputs_nml(src: str, dst: Path, output_timestep: int) -> None:
     """Copy mhm_outputs.nml to *dst*, forcing timeStep_model_outputs.
 
@@ -645,10 +667,18 @@ def main() -> None:
         log.info("[mhm] %s", line.rstrip())
     proc.wait()
 
-    if proc.returncode != 0:
+    final_nml = domain / "FinalParam.nml"
+    # mHM can crash in its at-exit cleanup (SIGABRT/SIGSEGV, negative code) AFTER writing
+    # FinalParam.nml; treat that as success if the calibrated file exists. A positive exit
+    # code is a real mHM error.
+    if proc.returncode < 0 and final_nml.exists():
+        log.warning("mHM terminated by signal %d after writing FinalParam.nml; "
+                    "treating as benign at-exit crash.", -proc.returncode)
+    elif proc.returncode != 0:
         log.error("mHM exited with code %d", proc.returncode)
         sys.exit(proc.returncode)
 
+    _strip_finalparam_garbage(final_nml)
     log.info("mHM calibration finished. Output in %s/output/", domain)
 
 

@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import shapely.vectorized
 import xarray as xr
+from pyproj import Transformer
 from shapely.ops import unary_union
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -233,6 +234,66 @@ def read_discharge(discharge_nc: Path, gauge_dir: Path, window=None) -> Dict:
         })
     if not gauges:
         raise ValueError(f"No Qsim_* variables found in {discharge_nc}.")
+    return {"gauges": gauges, "time": time}
+
+
+def _read_gauge_obs(gauge_txt: Path, time_index: pd.DatetimeIndex) -> np.ndarray:
+    """Read an mHM gauge file's observed discharge aligned to *time_index* [m3 s-1]."""
+    if not gauge_txt.exists():
+        return np.full(len(time_index), np.nan)
+    recs: Dict[pd.Timestamp, float] = {}
+    for ln in gauge_txt.read_text().splitlines():
+        f = ln.split()
+        if len(f) == 6 and f[0].isdigit() and len(f[0]) == 4:
+            recs[pd.Timestamp(int(f[0]), int(f[1]), int(f[2]), int(f[3]), int(f[4]))] = float(f[5])
+    vals = pd.Series(recs).sort_index().reindex(time_index).to_numpy(dtype=float, copy=True)
+    vals[vals <= -9990.0] = np.nan
+    return vals
+
+
+def read_discharge_from_qrouted(mrm_flux_nc: Path, gauge_dir: Path, window=None) -> Dict:
+    """Fallback hydrograph from the mRM routed-flow grid (Qrouted) [m3 s-1].
+
+    Used when mRM's discharge.nc/subdaily_discharge.nc are missing or corrupt
+    (mHM's at-exit heap-corruption crash can truncate them). mRM_Fluxes_States.nc
+    is written before the crash, so the routed flow survives. Simulated gauge
+    discharge = Qrouted at the gauge's outlet cell (highest mean routed flow in a
+    small window around the projected gauge); observed is read from the mHM gauge
+    file and aligned to the Qrouted time axis. Resolution follows the mRM output
+    cadence (hourly when timeStep_model_outputs_mrm=1).
+    """
+    start, end = window if window is not None else (EVAL_START_DATE, END_DATE)
+    ds = xr.open_dataset(mrm_flux_nc, decode_times=True).sel(time=slice(start, end))
+    if "Qrouted" not in ds or ds.sizes.get("time", 0) == 0:
+        raise ValueError(f"{mrm_flux_nc} has no Qrouted in {start}..{end}.")
+    q = ds["Qrouted"]
+    time = pd.DatetimeIndex(ds["time"].values)
+    east = np.asarray(ds["easting"].values, dtype=float)
+    north = np.asarray(ds["northing"].values, dtype=float)
+    qmean = q.mean("time").values
+
+    tf = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
+    meta = pd.read_csv(gauge_dir / "id_map.csv").set_index("local_id")
+    gauges: List[Dict] = []
+    for lid in meta.index:
+        gx, gy = tf.transform(float(meta.at[lid, "lon"]), float(meta.at[lid, "lat"]))
+        ci = int(np.argmin(np.abs(east - gx)))
+        ri = int(np.argmin(np.abs(north - gy)))
+        r0, r1 = max(0, ri - 2), min(len(north), ri + 3)
+        c0, c1 = max(0, ci - 2), min(len(east), ci + 3)
+        lr, lc = np.unravel_index(int(np.nanargmax(qmean[r0:r1, c0:c1])), (r1 - r0, c1 - c0))
+        qsim = np.asarray(q.isel(northing=r0 + lr, easting=c0 + lc).values, dtype=float)
+        qobs = _read_gauge_obs(gauge_dir / f"{int(lid)}.txt", time)
+        gauges.append({
+            "local_id": int(lid),
+            "site_no": str(meta.at[lid, "site_no"]),
+            "name": str(meta.at[lid, "name"]),
+            "time": time,
+            "qsim": qsim,
+            "qobs": qobs,
+        })
+    if not gauges:
+        raise ValueError(f"No gauges in id_map.csv for {mrm_flux_nc} fallback.")
     return {"gauges": gauges, "time": time}
 
 
