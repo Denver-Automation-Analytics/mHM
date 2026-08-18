@@ -23,15 +23,18 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from config import (NODATA, OUTPUT_CRS, TIMESTEP, WORKING_DIR,
+                    IO_MANNING_N,
                     TRITON_BF_CHANNEL_KM2, TRITON_BF_SLOPE_MIN, TRITON_BF_WIDTH_A,
-                    TRITON_BF_WIDTH_B, TRITON_CONST_MANN, TRITON_DEM_CELLSIZE_M,
-                    TRITON_DOMAIN_NAME, TRITON_END_DATE, TRITON_EXTBC_SEG_LEN_M,
-                    TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE, TRITON_INITH,
-                    TRITON_MANN_SOURCE, TRITON_OUT_DIR, TRITON_PRINT_INTERVAL_S,
-                    TRITON_PROJECTION, TRITON_START_DATE)
+                    TRITON_BF_WIDTH_B, TRITON_CHANNEL_MANN, TRITON_CONST_MANN,
+                    TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME, TRITON_END_DATE,
+                    TRITON_EXTBC_SEG_LEN_M, TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
+                    TRITON_INITH, TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
+                    TRITON_OUT_DIR,
+                    TRITON_PRINT_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE)
 
 from osgeo import gdal
 
+import esri_lulc
 import grid as gridmod
 import readers
 import writers
@@ -133,32 +136,68 @@ def main() -> int:
         n_obs = writers.write_obs(gauges, paths["obs"])
     log.info("Observation point(s): %d", n_obs)
 
+    facc_hi = work / "input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
+    fdir_hi = work / "input" / "dem" / "fdir.tif"
     lc_cache: dict = {}
+    facc_g_cache: dict = {}
 
     def ensure_lc() -> dict:
         """Warp the land-cover raster onto the DEM grid once; cache lut + tif."""
         if not lc_cache:
-            lut, nod = readers.read_manning_lookup(Path(TRITON_MANN_SOURCE))
+            src = Path(TRITON_IO_LULC_PATH)
+            if not src.exists() or args.force:
+                log.info("Acquiring ESRI/IO 10 m land cover -> %s", src)
+                esri_lulc.acquire(Path(WATERSHED_FILE), OUTPUT_CRS, src,
+                                  year=TRITON_IO_LULC_YEAR, resolution=TRITON_DEM_CELLSIZE_M)
+            lut, nod = readers.read_manning_lookup(src, IO_MANNING_N)
             lc_tif = out / f"{name}_lc_{epsg}.tif"
             if not lc_tif.exists() or args.force:
-                gridmod.warp_to_dem_grid(Path(TRITON_MANN_SOURCE), Path(WATERSHED_FILE),
+                gridmod.warp_to_dem_grid(src, Path(WATERSHED_FILE),
                                          OUTPUT_CRS, dem_grid, lc_tif, resample="near",
                                          dst_nodata=nod if nod is not None else -128)
             lc_cache.update(lut=lut, nod=nod, tif=lc_tif)
         return lc_cache
 
-    if not skip("mann"):
-        log.info("Generating Manning field from %s", TRITON_MANN_SOURCE)
+    def ensure_facc_g() -> dict:
+        """Warp full-res facc onto the DEM grid once; cache path + source pixel area."""
+        if not facc_g_cache:
+            fg = out / f"{name}_facc_{epsg}.tif"
+            if not fg.exists() or args.force:
+                gridmod.warp_to_dem_grid(facc_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
+                                         dem_grid, fg, resample="near", dst_nodata=NODATA)
+            facc_g_cache.update(path=fg, cell_area=gridmod.pixel_area_m2(facc_hi))
+        return facc_g_cache
+
+    # Channel roughness is burned into .mann using the same facc channel network.
+    burn_channels = TRITON_INITH and TRITON_CHANNEL_MANN is not None
+
+    mann_tif = Path(f'{paths["mann"]}.tif')
+    mann_ready = paths["mann"].exists() and paths["mann"].stat().st_size > 0 and mann_tif.exists()
+    if mann_ready and not args.force:
+        log.info("Skip (exists): %s", paths["mann"].name)
+    else:
+        log.info("Generating Manning field from %s", TRITON_IO_LULC_PATH)
         lc = ensure_lc()
-        writers.write_mann(lc["tif"], dem_grid, lc["lut"], TRITON_CONST_MANN, lc["nod"], paths["mann"])
+        burn_kwargs: dict = {}
+        if burn_channels:
+            if not facc_hi.exists():
+                log.error("Channel roughness burn requires %s. Run mod10 to generate it.", facc_hi)
+                return 1
+            fg = ensure_facc_g()
+            burn_kwargs = dict(channel_facc_tif=fg["path"], channel_km2=TRITON_BF_CHANNEL_KM2,
+                               cell_area_m2=fg["cell_area"], channel_n=TRITON_CHANNEL_MANN)
+        n_burn = writers.write_mann(lc["tif"], dem_grid, lc["lut"], TRITON_CONST_MANN,
+                                    lc["nod"], paths["mann"], **burn_kwargs)
+        log.info("Manning GeoTIFF: %s", mann_tif.name)
+        if burn_channels:
+            log.info("Burned channel roughness n=%.3f into %d cell(s) of %s",
+                     TRITON_CHANNEL_MANN, n_burn, paths["mann"].name)
 
     init_names = None
     if TRITON_INITH:
         ic_keys = ("inith", "initqx", "inityq")
         ic_files = [paths[k] for k in ic_keys] + [Path(f"{paths[k]}.tif") for k in ic_keys]
         ready = all(p.exists() and p.stat().st_size > 0 for p in ic_files)
-        facc_hi = work / "input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
-        fdir_hi = work / "input" / "dem" / "fdir.tif"
         if ready and not args.force:
             for k in ic_keys:
                 log.info("Skip (exists): %s", paths[k].name)
@@ -174,9 +213,9 @@ def main() -> int:
             if not slope_g.exists() or args.force:
                 gdal.DEMProcessing(str(slope_g), str(dem_grid["tif"]), "slope", slopeFormat="degree")
             log.info("Using full-resolution fdir/facc from input/dem/ (reprojected to the TRITON grid)")
-            cell_area = gridmod.pixel_area_m2(facc_hi)
-            facc_g = gridmod.warp_to_dem_grid(facc_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
-                        dem_grid, out / f"{name}_facc_{epsg}.tif", resample="near", dst_nodata=NODATA)
+            fg = ensure_facc_g()
+            cell_area = fg["cell_area"]
+            facc_g = fg["path"]
             fdir_g = gridmod.warp_to_dem_grid(fdir_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
                         dem_grid, out / f"{name}_fdir_{epsg}.tif", resample="near", dst_nodata=0)
             bf = readers.read_baseflow_preevent(flux_nc, start_date=args.start_date)

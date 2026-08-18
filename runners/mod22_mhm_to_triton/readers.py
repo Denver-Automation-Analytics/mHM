@@ -108,28 +108,18 @@ def read_gauges(id_map_csv: Path) -> List[Dict]:
     return gauges
 
 
-def read_manning_lookup(tif: Path, value_col: str = "VALUE",
-                        n_col: str = "MANNINGS_N") -> Tuple[Dict[int, float], float]:
-    """Return ({land-cover code: Manning n}, raster nodata) from the RAT of *tif*.
+def read_manning_lookup(tif: Path, mapping: Dict[int, float]) -> Tuple[Dict[int, float], float]:
+    """Return ({class code: Manning n}, raster nodata) for the land-cover *tif*.
 
-    The source land-cover raster carries a raster attribute table whose n_col
-    column holds the roughness for each class value.
+    The raster carries no roughness attribute, so the code->n map is supplied by
+    the caller (config.IO_MANNING_N); only the NoData value is read from the band.
     """
     ds = gdal.Open(str(tif))
     if ds is None:
         raise FileNotFoundError(f"Cannot open Manning source raster: {tif}")
-    band = ds.GetRasterBand(1)
-    rat = band.GetDefaultRAT()
-    if rat is None:
-        raise ValueError(f"{tif} has no raster attribute table (need {n_col!r}).")
-    cols = {rat.GetNameOfCol(c): c for c in range(rat.GetColumnCount())}
-    if value_col not in cols or n_col not in cols:
-        raise KeyError(f"{tif} RAT is missing {value_col!r}/{n_col!r}; has {list(cols)}.")
-    vc, nc = cols[value_col], cols[n_col]
-    lut = {int(rat.GetValueAsInt(r, vc)): float(rat.GetValueAsDouble(r, nc))
-           for r in range(rat.GetRowCount())}
-    nodata = band.GetNoDataValue()
-    ds = None  # keep alive until RAT fully read, then release
+    nodata = ds.GetRasterBand(1).GetNoDataValue()
+    ds = None
+    lut = {int(k): float(v) for k, v in mapping.items()}
     return lut, nodata
 
 

@@ -87,11 +87,17 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
 
 
 def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
-               const_mann: float, nodata_lc, mann_path: Path) -> None:
+               const_mann: float, nodata_lc, mann_path: Path,
+               channel_facc_tif: Path = None, channel_km2: float = None,
+               cell_area_m2: float = None, channel_n: float = None) -> int:
     """Write the per-cell Manning grid [-] aligned to the DEM (headerless).
 
     Land-cover codes on the DEM grid are mapped to their RAT roughness; nodata
-    or unmapped cells fall back to *const_mann*.
+    or unmapped cells fall back to *const_mann*. When *channel_facc_tif* and
+    *channel_n* are given, cells whose drainage area (facc x *cell_area_m2*)
+    reaches *channel_km2* are overwritten with *channel_n* (channel roughness).
+    A GeoTIFF mirror (<mann_path>.tif) is written for inspection. Returns the
+    number of channel cells burned in.
     """
     ds = gdal.Open(str(lc_tif))
     band = ds.GetRasterBand(1)
@@ -102,6 +108,23 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
         if 0 <= code <= maxcode:
             table[code] = nval
     nod = None if nodata_lc is None else int(nodata_lc)
+
+    burn = channel_facc_tif is not None and channel_n is not None
+    bfacc = None
+    if burn:
+        dsf = gdal.Open(str(channel_facc_tif))
+        bfacc = dsf.GetRasterBand(1)
+
+    # GeoTIFF mirror aligned to the DEM grid, for manual inspection
+    cs = dem_grid["cellsize"]
+    tif = gdal.GetDriverByName("GTiff").Create(
+        f"{mann_path}.tif", ncols, nrows, 1, gdal.GDT_Float32,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+    tif.SetGeoTransform((dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs))
+    tif.SetProjection(gdal.Open(str(dem_grid["tif"])).GetProjection())
+    tband = tif.GetRasterBand(1)
+
+    n_chan = 0
     with open(mann_path, "w") as f:
         for j in range(nrows):
             row = band.ReadAsArray(0, j, ncols, 1)[0].astype(np.int64)
@@ -110,9 +133,20 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
             if nod is not None:
                 m &= row != nod
             out[m] = table[row[m]]
+            if burn:
+                facc = bfacc.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
+                chan = (facc > NODATA + 1) & (facc * cell_area_m2 / 1e6 >= channel_km2)
+                out[chan] = channel_n
+                n_chan += int(chan.sum())
             f.write(" ".join(np.char.mod("%.4f", out).tolist()))
             f.write("\n")
+            tband.WriteArray(out.reshape(1, -1).astype(np.float32), 0, j)
+    tif.FlushCache()
+    tif = None
     ds = None
+    if burn:
+        dsf = None
+    return n_chan
 
 
 def _snap_segment(grid: Dict, outlet: Tuple[float, float],

@@ -15,7 +15,7 @@ WARMUP_DAYS     = 350  # spin-up days drawn from forcing in [EVAL_START_DATE - W
 START_DATE      = (date.fromisoformat(EVAL_START_DATE) - timedelta(days=WARMUP_DAYS)).isoformat()
 TIMESTEP        = "hourly"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD  = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
-OPTI_OBJECTIVE  = "nse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
+OPTI_OBJECTIVE  = "nse_lnnse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
 N_ITERATIONS   = 1000     # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED           = 32      # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS  = 25     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
@@ -32,13 +32,27 @@ TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg
 TRITON_EXTBC_TYPE      = 2            # default outlet boundary: 2 = normal slope (velocity from bed slope + Manning roughness)
 TRITON_EXTBC_VALUE     = 0.001        # value for the boundary condition; for type 2 this is the bed slope [-]
 TRITON_EXTBC_SEG_LEN_M = 2000         # length [m] of the auto-derived outlet boundary segment
-TRITON_PRINT_INTERVAL_S = 3600        # TRITON spatial output interval [s]
-TRITON_CONST_MANN      = 0.035        # fallback constant Manning roughness used where land cover is unavailable
-TRITON_MANN_SOURCE     = "/workspace/data/01-source/lulc_nvalue.tif"  # nationwide land-cover raster; its RAT MANNINGS_N column gives per-class roughness
+TRITON_PRINT_INTERVAL_S = 900         # TRITON spatial output interval [s]
+TRITON_CONST_MANN      = 0.060        # fallback constant Manning roughness used where land cover is unavailable
+TRITON_CHANNEL_MANN    = 0.038         # roughness burned into .mann for channel cells (facc >= TRITON_BF_CHANNEL_KM2); None disables
+TRITON_IO_LULC_PATH    = f"{TRITON_OUT_DIR}/io_lulc.tif"  # cached ESRI/IO 10 m land-cover raster (auto-acquired by mod22 when missing)
+TRITON_IO_LULC_YEAR    = None         # IO annual mosaic year (e.g. "2023"); None = latest available
+# Per-ESRI/IO-class Manning n for the TRITON .mann field (io-lulc-annual-v02).
+# NoData (0) and Clouds (10) are omitted and fall back to TRITON_CONST_MANN.
+IO_MANNING_N = {
+    1:  0.038,  # Water
+    2:  0.150,  # Trees
+    4:  0.070,  # Flooded Vegetation
+    5:  0.040,  # Crops
+    7:  0.022,  # Built Area
+    8:  0.030,  # Bare Ground
+    9:  0.030,  # Snow/Ice
+    11: 0.040,  # Rangeland
+}
 TRITON_START_DATE      = "2026-08-05"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; None = full mHM record
 TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_INITH           = True         # warm-start channels: seed initial depth/discharge (h,qx,qy) from mHM pre-event baseflow
-TRITON_BF_CHANNEL_KM2  = 1.0          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
-TRITON_BF_WIDTH_A      = 2.0          # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)
+TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
+TRITON_BF_WIDTH_A      = 3.0          # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)
 TRITON_BF_WIDTH_B      = 0.5          # width exponent b
 TRITON_BF_SLOPE_MIN    = 1e-4         # floor on bed slope [m/m] in the Manning normal-depth calculation
