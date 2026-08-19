@@ -447,7 +447,7 @@ if __name__ == "__main__":
     # ---- USER INPUTS --------------------------------------------------
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
-    CHUNK_SIZE         = 32       # chunk size for tiled processing (cells)
+    CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
     DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
     TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
     MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")

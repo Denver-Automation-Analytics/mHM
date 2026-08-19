@@ -49,7 +49,7 @@ IO_MANNING_N = {
     9:  0.030,  # Snow/Ice
     11: 0.040,  # Rangeland
 }
-TRITON_START_DATE      = "2026-08-05"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; None = full mHM record
+TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; None = full mHM record
 TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_INITH           = True         # warm-start channels: seed initial depth/discharge (h,qx,qy) from mHM pre-event baseflow
 TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
