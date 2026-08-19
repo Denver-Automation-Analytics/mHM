@@ -7,7 +7,7 @@ latlon.nc, computes PET via the chosen method, and writes mHM-ready
 
 mHM configuration expected:
     process(5)      = 0   (pre-computed PET)
-    dir_referenceet = "<domain>/input/meteo/pet/"
+    dir_referenceet = "<domain>/mhm_input/meteo/pet/"
     iFlag_cordinate_sys = 0   (projected LCC metres; same as mod11)
 """
 
@@ -34,9 +34,9 @@ from writers import create_pet_nc, write_header_txt, write_pet_chunk
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
 # ---------------------------------------------------------------------------
-TAVG_FILE   = os.path.join(WORKING_DIR, "input/meteo/tavg/tavg.nc")
-HEADER_FILE = os.path.join(WORKING_DIR, "input/latlon/header.txt")   # shared with mod11
-PET_OUT_DIR = os.path.join(WORKING_DIR, "input/meteo/pet")
+TAVG_FILE   = os.path.join(WORKING_DIR, "mhm_input/meteo/tavg/tavg.nc")
+HEADER_FILE = os.path.join(WORKING_DIR, "mhm_input/latlon/header.txt")   # shared with mod11
+PET_OUT_DIR = os.path.join(WORKING_DIR, "mhm_input/meteo/pet")
 MAX_WORKERS = 10           # set >1 for multicore parallelism
 CHUNK_SIZE  = 256           # timesteps per batch; lower = less peak RAM
 
@@ -46,11 +46,11 @@ TMAX_FILE: str | None = None
 TMIN_FILE: str | None = None
 
 # Optional: set all four to enable penman_monteith
-SSRD_FILE = os.path.join(WORKING_DIR, "input/meteo/ssrd/ssrd.nc")
-STRD_FILE = os.path.join(WORKING_DIR, "input/meteo/strd/strd.nc")
-WINDSPEED_FILE = os.path.join(WORKING_DIR, "input/meteo/windspeed/windspeed.nc")
-RHAVG_FILE = os.path.join(WORKING_DIR, "input/meteo/rhavg/rhavg.nc")
-DEM_FILE = os.path.join(WORKING_DIR, "input/dem/dem_corrected.tif")
+SSRD_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/ssrd/ssrd.nc")
+STRD_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/strd/strd.nc")
+WINDSPEED_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/windspeed/windspeed.nc")
+RHAVG_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/rhavg/rhavg.nc")
+DEM_FILE = os.path.join(WORKING_DIR, "mhm_input/dem/dem_corrected.tif")
 # ---------------------------------------------------------------------------
 
 log = logging.getLogger("pet_to_mhm")

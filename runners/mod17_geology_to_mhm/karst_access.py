@@ -449,11 +449,11 @@ def acquire_karst(
 def main() -> None:
     # ---- USER-DEFINED INPUTS -------------------------------------------------
     # 1) Boundary GeoDataFrame. Replace this with your own AOI. Examples:
-    WATERSHED_FILE = "/workspace/test_domain_3/input/domain/watershed.geojson"
+    WATERSHED_FILE = "/workspace/test_domain_3/mhm_input/domain/watershed.geojson"
     boundary_gdf = gpd.read_file(WATERSHED_FILE)
 
     # 2) Local output file path. Extension sets the format.
-    OUTPUT_FILE = "/workspace/test_domain_3/input/geology/karst.gpkg"
+    OUTPUT_FILE = "/workspace/test_domain_3/mhm_input/geology/karst.gpkg"
     output_path = OUTPUT_FILE
     # -------------------------------------------------------------------------
 

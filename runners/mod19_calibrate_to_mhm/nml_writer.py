@@ -113,51 +113,51 @@ def write_mhm_nml(
   step_iter = 5.0
   riv_widths_file = 'Q_bkfl'
   riv_widths_name = 'P_bkfl'
-  dir_riv_widths(1) = "{d}/input/optional_data/"
+  dir_riv_widths(1) = "{d}/mhm_input/optional_data/"
 /
 
 &directories_general
   dirConfigOut         = "{d}/"
-  dirCommonFiles       = "{d}/input/morph/"
-  dir_Morpho(1)        = "{d}/input/morph/"
-  dir_LCover(1)        = "{d}/input/luse/"
+  dirCommonFiles       = "{d}/mhm_input/morph/"
+  dir_Morpho(1)        = "{d}/mhm_input/morph/"
+  dir_LCover(1)        = "{d}/mhm_input/luse/"
   mhm_file_RestartOut(1) = "{d}/restart/mHM_restart_001.nc"
   mrm_file_RestartOut(1) = "{d}/restart/mRM_restart_001.nc"
   dir_Out(1)           = "{d}/output/"
-  file_LatLon(1)       = "{d}/input/latlon/latlon.nc"
+  file_LatLon(1)       = "{d}/mhm_input/latlon/latlon.nc"
 /
 
 &directories_mHM
   inputFormat_meteo_forcings = "nc"
   bound_error = .TRUE.
-  dir_Precipitation(1) = "{d}/input/meteo/pre/"
-  dir_Temperature(1)   = "{d}/input/meteo/tavg/"
-  dir_ReferenceET(1)   = "{d}/input/meteo/pet/"
-  dir_MinTemperature(1) = "{d}/input/meteo/"
-  dir_MaxTemperature(1) = "{d}/input/meteo/"
-  dir_NetRadiation(1)   = "{d}/input/meteo/"
-  dir_absVapPressure(1) = "{d}/input/meteo/"
-  dir_windspeed(1)      = "{d}/input/meteo/"
-  dir_Radiation(1)      = "{d}/input/meteo/"
+  dir_Precipitation(1) = "{d}/mhm_input/meteo/pre/"
+  dir_Temperature(1)   = "{d}/mhm_input/meteo/tavg/"
+  dir_ReferenceET(1)   = "{d}/mhm_input/meteo/pet/"
+  dir_MinTemperature(1) = "{d}/mhm_input/meteo/"
+  dir_MaxTemperature(1) = "{d}/mhm_input/meteo/"
+  dir_NetRadiation(1)   = "{d}/mhm_input/meteo/"
+  dir_absVapPressure(1) = "{d}/mhm_input/meteo/"
+  dir_windspeed(1)      = "{d}/mhm_input/meteo/"
+  dir_Radiation(1)      = "{d}/mhm_input/meteo/"
   time_step_model_inputs(1) = 0
 /
 
 &directories_mRM
-  dir_Gauges(1)        = "{d}/input/gauge/"
+  dir_Gauges(1)        = "{d}/mhm_input/gauge/"
   dir_Total_Runoff(1)  = "{d}/output/"
-  dir_Bankfull_Runoff(1) = "{d}/input/optional_data/"
+  dir_Bankfull_Runoff(1) = "{d}/mhm_input/optional_data/"
 /
 
 &optional_data
-  dir_soil_moisture(1)      = "{d}/input/optional_data/"
+  dir_soil_moisture(1)      = "{d}/mhm_input/optional_data/"
   nSoilHorizons_sm_input    = 1
   timeStep_sm_input         = -2
-  dir_neutrons(1)           = "{d}/input/optional_data/"
-  dir_evapotranspiration(1) = "{d}/input/optional_data/"
+  dir_neutrons(1)           = "{d}/mhm_input/optional_data/"
+  dir_evapotranspiration(1) = "{d}/mhm_input/optional_data/"
   timeStep_et_input         = -2
-  dir_tws(1)                = "{d}/input/optional_data/"
+  dir_tws(1)                = "{d}/mhm_input/optional_data/"
   timeStep_tws_input        = -2
-  dir_spf(1)                = "{d}/input/optional_data/"
+  dir_spf(1)                = "{d}/mhm_input/optional_data/"
   timeStep_spf_input        = -1
   weight_for_optional_data  = 1
   snow_water_equivalent_threshold_for_spf = 0
@@ -208,7 +208,7 @@ def write_mhm_nml(
 /
 
 &directories_MPR
-  dir_gridded_LAI(1) = "{d}/input/lai/"
+  dir_gridded_LAI(1) = "{d}/mhm_input/lai/"
 /
 
 &evaluation_gauges

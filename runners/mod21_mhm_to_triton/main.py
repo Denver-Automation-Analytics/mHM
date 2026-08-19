@@ -46,7 +46,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("mhm_to_triton")
 
-WATERSHED_FILE = os.path.join(WORKING_DIR, "input", "domain", "watershed.geojson")
+WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input", "domain", "watershed.geojson")
 if not os.path.exists(WATERSHED_FILE):
     raise FileNotFoundError(f"Watershed file not found: {WATERSHED_FILE}. Run mod10 first to generate it.")
 
@@ -70,10 +70,10 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     name = args.name
 
-    flux_nc = work / "output" / "mHM_Fluxes_States.nc"
-    src_dem = work / "input" / "dem" / "dem_corrected.tif"
-    facc_nc = work / "input" / "morph" / "facc.nc"
-    id_map = work / "input" / "gauge" / "id_map.csv"
+    flux_nc = work / "mhm_output" / "mHM_Fluxes_States.nc"
+    src_dem = work / "mhm_input" / "dem" / "dem_corrected.tif"
+    facc_nc = work / "mhm_input" / "morph" / "facc.nc"
+    id_map = work / "mhm_input" / "gauge" / "id_map.csv"
     for pth in (flux_nc, src_dem, facc_nc, id_map):
         if not pth.exists():
             log.error("Required input missing: %s", pth)
@@ -136,8 +136,8 @@ def main() -> int:
         n_obs = writers.write_obs(gauges, paths["obs"])
     log.info("Observation point(s): %d", n_obs)
 
-    facc_hi = work / "input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
-    fdir_hi = work / "input" / "dem" / "fdir.tif"
+    facc_hi = work / "mhm_input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
+    fdir_hi = work / "mhm_input" / "dem" / "fdir.tif"
     lc_cache: dict = {}
     facc_g_cache: dict = {}
 
@@ -212,7 +212,7 @@ def main() -> int:
             slope_g = out / f"{name}_slope_{epsg}.tif"
             if not slope_g.exists() or args.force:
                 gdal.DEMProcessing(str(slope_g), str(dem_grid["tif"]), "slope", slopeFormat="degree")
-            log.info("Using full-resolution fdir/facc from input/dem/ (reprojected to the TRITON grid)")
+            log.info("Using full-resolution fdir/facc from mhm_input/dem/ (reprojected to the TRITON grid)")
             fg = ensure_facc_g()
             cell_area = fg["cell_area"]
             facc_g = fg["path"]

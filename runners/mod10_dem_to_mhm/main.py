@@ -44,7 +44,7 @@ def load_domain(buffer_m=None, crs=None):
 
 def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
             res: int = 10,
-            save_dir: str = os.path.join(WORKING_DIR, "input/dem")):
+            save_dir: str = os.path.join(WORKING_DIR, "mhm_input/dem")):
     """
     Get tiled DEM data within the model perimeter
 
@@ -55,7 +55,7 @@ def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
     res : int, optional
         The resolution of the DEM data to retrieve (default is 10 m)
     save_dir : str, optional
-        The directory to save the DEM data (default is os.path.join(WORKING_DIR, "input/dem"))
+        The directory to save the DEM data (default is os.path.join(WORKING_DIR, "mhm_input/dem"))
 
     Returns
     -------
@@ -439,7 +439,7 @@ def main():
     print("Delineating true basin boundary and masking morphology...")
     _delineate_and_mask_watershed(
         l0_dir, MORPH_DIR, DOMAIN_BUFFER_M,
-        os.path.join(WORKING_DIR, "input/domain/watershed.geojson"),
+        os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson"),
     )
 
 if __name__ == "__main__":
@@ -448,9 +448,9 @@ if __name__ == "__main__":
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
     CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
-    DEM_DIR  = os.path.join(WORKING_DIR, "input/dem")  # directory for DEM processing
-    TILES_DIR = os.path.join(WORKING_DIR, "input/dem/tiles")
-    MORPH_DIR = os.path.join(WORKING_DIR, "input/morph")
+    DEM_DIR  = os.path.join(WORKING_DIR, "mhm_input/dem")  # directory for DEM processing
+    TILES_DIR = os.path.join(WORKING_DIR, "mhm_input/dem/tiles")
+    MORPH_DIR = os.path.join(WORKING_DIR, "mhm_input/morph")
     # -------------------------------------------------------------------
 
     main()

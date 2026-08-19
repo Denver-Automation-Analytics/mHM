@@ -62,7 +62,7 @@ def main() -> None:
              l0_header["nrows"], l0_header["cellsize"])
 
     # 2. Discover gauges strictly inside the watershed polygon.
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
@@ -188,11 +188,11 @@ if __name__ == "__main__":
     REPO_ROOT = Path(__file__).resolve().parents[2]
     load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
     # ---- OUTPUTS ---------------------------------------------------
-    OUTPUT_DIR            = os.path.join(WORKING_DIR, "input", "gauge")
+    OUTPUT_DIR            = os.path.join(WORKING_DIR, "mhm_input", "gauge")
     # --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
-    L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+    L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
     TARGET_CRS_WKT        = OUTPUT_CRS
-    LATLON_NC_PATH        = os.path.join(WORKING_DIR, "input", "latlon", "latlon.nc")
+    LATLON_NC_PATH        = os.path.join(WORKING_DIR, "mhm_input", "latlon", "latlon.nc")
     # --- Retrieval knobs -----------------------------------------------
     SITE_TYPE_CODE        = "ST"       # Stream sites
     PARAMETER_CODE        = "00060"    # Discharge, m^3/s

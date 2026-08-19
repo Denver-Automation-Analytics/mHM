@@ -508,7 +508,7 @@ def _require(path: Path, produced_by: str) -> Path:
 
 
 def validate_inputs(domain: Path) -> None:
-    inp = domain / "input"
+    inp = domain / "mhm_input"
 
     # mod10 — terrain morphology (NC format)
     for name in ("dem.nc", "slope.nc", "aspect.nc", "fdir.nc", "facc.nc"):
@@ -516,7 +516,7 @@ def validate_inputs(domain: Path) -> None:
 
     # mod13 — land cover
     if not list((inp / "luse").glob("lc_*.asc")):
-        log.error("Missing: lc_*.asc in %s/input/luse/  (run mod13_landcover_to_mhm first)", domain)
+        log.error("Missing: lc_*.asc in %s/mhm_input/luse/  (run mod13_landcover_to_mhm first)", domain)
         sys.exit(1)
 
     # mod14 — soils
@@ -552,7 +552,7 @@ def validate_inputs(domain: Path) -> None:
 
 def main() -> None:
     domain = Path(WORKING_DIR)
-    inp    = domain / "input"
+    inp    = domain / "mhm_input"
 
     # Phase 1 — validate
     validate_inputs(domain)
@@ -626,7 +626,7 @@ def main() -> None:
     log.info("Written: %s", nml_path)
 
     # Phase 4 — create output directories and copy companion namelists
-    (domain / "output").mkdir(parents=True, exist_ok=True)
+    (domain / "mhm_output").mkdir(parents=True, exist_ok=True)
     (domain / "restart").mkdir(parents=True, exist_ok=True)
     (inp / "optional_data").mkdir(parents=True, exist_ok=True)
 
@@ -679,7 +679,7 @@ def main() -> None:
         sys.exit(proc.returncode)
 
     _strip_finalparam_garbage(final_nml)
-    log.info("mHM calibration finished. Output in %s/output/", domain)
+    log.info("mHM calibration finished. Output in %s/mhm_output/", domain)
 
 
 if __name__ == "__main__":

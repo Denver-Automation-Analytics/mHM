@@ -92,9 +92,9 @@ if __name__ == "__main__":
     # Example usage
     import geopandas as gpd
 
-    mosaic_file = "/workspace/test_domain_3/input/dem/mosaic.tif"
-    perimeter_file = "/workspace/test_domain_3/input/domain/huc4_1211.geojson"
-    output_file = "/workspace/test_domain_3/input/dem/mosaic_clipped.tif"
+    mosaic_file = "/workspace/test_domain_3/mhm_input/dem/mosaic.tif"
+    perimeter_file = "/workspace/test_domain_3/mhm_input/domain/huc4_1211.geojson"
+    output_file = "/workspace/test_domain_3/mhm_input/dem/mosaic_clipped.tif"
 
     perimeter = gpd.read_file(perimeter_file)
     clip_mosaic(mosaic_file, perimeter, output_file=output_file)

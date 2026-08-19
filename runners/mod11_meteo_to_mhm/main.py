@@ -192,7 +192,7 @@ def main() -> None:
     log.info("HRRR CRS: %s", hrrr_crs)
 
     # 2. Watershed → LCC → snap to native HRRR grid
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
@@ -327,10 +327,10 @@ def main() -> None:
 
 if __name__ == "__main__":
     # ---- USER INPUTS ---------------------------------------------------
-    L0_DEM           = os.path.join(WORKING_DIR, "input/morph/dem.nc")
+    L0_DEM           = os.path.join(WORKING_DIR, "mhm_input/morph/dem.nc")
     INIT_TIME        = "latest"                      # "latest" or "YYYY-MM-DDTHH" (UTC)
-    METEO_OUTPUT_DIR = os.path.join(WORKING_DIR, "input/meteo")  # output directory for mHM-ready files
-    LATLON_OUTPUT_DIR = os.path.join(WORKING_DIR, "input/latlon") # output directory for latlon.nc
+    METEO_OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input/meteo")  # output directory for mHM-ready files
+    LATLON_OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input/latlon") # output directory for latlon.nc
     FORECAST         = False                            # use forecast (True) or analysis (False) HRRR subscription
     RESUME           = False    # skip finished vars / resume missing temp batches instead of wiping _tmp
 

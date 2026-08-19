@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import L1_CELL_SIZE_M, WORKING_DIR, OUTPUT_CRS  # noqa: E402
 
 # ---- USER INPUTS --------------------------------------------------
-L0_HEADER   = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
-OUTPUT_DIR  = os.path.join(WORKING_DIR, "input", "latlon")
+L0_HEADER   = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
+OUTPUT_DIR  = os.path.join(WORKING_DIR, "mhm_input", "latlon")
 # -------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

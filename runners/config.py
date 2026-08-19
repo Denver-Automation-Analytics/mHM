@@ -1,8 +1,9 @@
 """Shared configuration for all runner modules."""
 from datetime import date, timedelta
 
+# --- mHM/mRM model configuration ---
 WORKING_DIR = "/workspace/data/eastfork_whitewater"  # working directory for all modules
-DOMAIN_FILE = "/workspace/data/eastfork_whitewater/input/domain/data.geojson"  # watershed boundary for all modules
+DOMAIN_FILE = "/workspace/data/eastfork_whitewater/mhm_input/domain/data.geojson"  # watershed boundary for all modules
 DOMAIN_BUFFER_M = 1000     # buffer [m] grown around the domain polygon when clipping/gridding inputs
 L0_CELL_SIZE_M = 250       # Landscape detail grid resolution (mod10, mod13, mod14, mod15, mod16)
 L1_CELL_SIZE_M = 1000      # Hydrologic simulation grid resolution (i.e., mHM output resolution)
@@ -24,8 +25,8 @@ WANTED_GAUGE_IDS = ["03275600",]
 NODATA = -9999
 RESUME = False  # mod19: if True, reseed DDS start values from the previous run's FinalParam.nml
 
-# --- mod22 (mHM/mRM -> TRITON hydraulic model inputs) ---
-TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton"  # directory that receives the generated TRITON input files (matches the input/<domain>/ paths in the .cfg)
+# --- TRITON model configuration ---
+TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton_input"  # directory that receives the generated TRITON input files (matches the input/<domain>/ paths in the .cfg)
 TRITON_DOMAIN_NAME     = "eastfork_whitewater"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
 TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
@@ -56,3 +57,11 @@ TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above whic
 TRITON_BF_WIDTH_A      = 3.0          # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)
 TRITON_BF_WIDTH_B      = 0.5          # width exponent b
 TRITON_BF_SLOPE_MIN    = 1e-4         # floor on bed slope [m/m] in the Manning normal-depth calculation
+
+# --- TRITON output -> map configuration (mod22) ---
+TRITON_MAP_GTIFF_DIR   = f"{WORKING_DIR}/triton_output/gtiff"  # directory holding the per-timestep TRITON GeoTIFFs (<VAR>_<NN>_<MM>.tif + <VAR>_<NN>.vrt)
+TRITON_MAP_OUT_DIR     = f"{WORKING_DIR}/triton_output/maps"   # directory that receives the consolidated netCDFs and pixel-max GeoTIFFs
+TRITON_MAP_CFG         = f"{WORKING_DIR}/triton_output/cfg/config_1.cfg"  # TRITON .cfg parsed for print_interval (output cadence in seconds)
+TRITON_MAP_HMIN        = 0.01         # water-depth floor [m] below which velocity is undefined (masked to NODATA)
+TRITON_MAP_MIN_DEPTH   = 0.01         # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
+TRITON_MAP_CLIP        = f"{WORKING_DIR}/mhm_input/domain/watershed.geojson"  # polygon boundary the maps are clipped to (cells outside -> NODATA); None/"" disables

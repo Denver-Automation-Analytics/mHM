@@ -42,7 +42,7 @@ if not os.environ.get("GHL_REPO"):
     )
 
 # ---- OUTPUTS ---------------------------------------------------
-OUTPUT_DIR = os.path.join(WORKING_DIR, "input", "luse")
+OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input", "luse")
 
 # --- GHL subscription -------------------------------------------
 # Repo name is read from the GHL_REPO env var so it isn't hard-coded in source.
@@ -94,13 +94,13 @@ def main() -> None:
     # 1. Load the canonical L0 grid produced by the DEM runner (mod10).
     #    All L0 inputs must share this exact grid; deriving it independently
     #    from the watershed bbox produces a misaligned (inset) grid.
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "input", "domain", "watershed.geojson")
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input", "domain", "watershed.geojson")
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file not found: {WATERSHED_FILE}. "
             "Run runners/mod10_dem_to_mhm first."
         )
-    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
     if not os.path.exists(L0_MORPH_NC_PATH):
         raise FileNotFoundError(
             f"Canonical L0 morph grid not found: {L0_MORPH_NC_PATH}. "

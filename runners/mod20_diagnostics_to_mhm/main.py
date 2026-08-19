@@ -297,8 +297,8 @@ def main() -> None:
     log.info("Diagnostics window (full water years): %s .. %s", window[0], window[1])
     flux = read_fluxes(flux_nc, window)
     inp = read_inputs(
-        work / "input/meteo/pre/pre.nc",
-        work / "input/meteo/pet/pet.nc",
+        work / "mhm_input/meteo/pre/pre.nc",
+        work / "mhm_input/meteo/pet/pet.nc",
         window,
     )
 
@@ -316,20 +316,20 @@ def main() -> None:
         if not disch_nc.exists():
             disch_nc = out_dir / "discharge.nc"
         try:
-            disch = read_discharge(disch_nc, work / "input/gauge", window)
+            disch = read_discharge(disch_nc, work / "mhm_input/gauge", window)
         except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
             # mHM's at-exit crash can truncate discharge.nc; recover the hydrograph
             # from the routed-flow grid (written before the crash).
             log.warning("discharge file unusable (%s); recovering hydrograph from %s.",
                         exc, MRM_FLUX_FILE)
             disch = read_discharge_from_qrouted(out_dir / MRM_FLUX_FILE,
-                                                work / "input/gauge", window)
+                                                work / "mhm_input/gauge", window)
         dstats = stats.discharge_stats(disch)
         _print_hydro_summary(dstats)
     except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
         log.warning("Hydrograph diagnostics skipped: %s", exc)
     try:
-        terr = read_terrain(work / "input/morph")
+        terr = read_terrain(work / "mhm_input/morph")
         tstats = stats.terrain_stats(terr)
     except (FileNotFoundError, ValueError, KeyError) as exc:
         log.warning("Terrain diagnostics skipped: %s", exc)

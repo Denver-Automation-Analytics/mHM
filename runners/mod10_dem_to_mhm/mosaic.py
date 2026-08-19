@@ -169,8 +169,8 @@ def mosaic_tiles(tiles, output_path: str) -> None:
 
 
 if __name__ == "__main__":
-    DATA_DIR = "/workspace/test_domain_3/input/dem"
-    OUTPUT_PATH = "/workspace/test_domain_3/input/dem/mosaic.tif"
+    DATA_DIR = "/workspace/test_domain_3/mhm_input/dem"
+    OUTPUT_PATH = "/workspace/test_domain_3/mhm_input/dem/mosaic.tif"
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     mosaic_tiles(DATA_DIR, OUTPUT_PATH)

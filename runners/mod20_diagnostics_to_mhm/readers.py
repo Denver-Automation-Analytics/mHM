@@ -206,7 +206,7 @@ def read_discharge(discharge_nc: Path, gauge_dir: Path, window=None) -> Dict:
 
     mRM writes Qsim_/Qobs_<10-digit local id> in discharge.nc; observed gaps are
     stored as the nodata sentinel and returned as NaN. Gauge metadata (USGS site
-    number, name) is taken from input/gauge/id_map.csv.
+    number, name) is taken from mhm_input/gauge/id_map.csv.
     """
     start, end = window if window is not None else (EVAL_START_DATE, END_DATE)
     ds = xr.open_dataset(discharge_nc, decode_times=True).sel(time=slice(start, end))

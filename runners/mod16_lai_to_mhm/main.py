@@ -58,7 +58,7 @@ def main(start_date: str,
          out_nc: str,
          chunks: int | None = None) -> int:
 
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
@@ -91,7 +91,7 @@ def main(start_date: str,
 
     # Align to the canonical L0 grid produced by mod10 so mHM's generated
     # x/y match the LAI NetCDF dimensions exactly.
-    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "input", "morph", "dem.nc")
+    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
     if not os.path.exists(L0_MORPH_NC_PATH):
         raise FileNotFoundError(
             f"Canonical L0 morph grid not found: {L0_MORPH_NC_PATH}. "
@@ -107,5 +107,5 @@ if __name__ == "__main__":
 
     main(START_DATE,
          END_DATE,
-         out_nc=os.path.join(WORKING_DIR, "input", "lai", "lai.nc")
+         out_nc=os.path.join(WORKING_DIR, "mhm_input", "lai", "lai.nc")
          )
