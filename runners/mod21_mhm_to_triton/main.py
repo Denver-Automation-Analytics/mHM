@@ -6,7 +6,7 @@ that drive the TRITON 2D hydraulic model:
   <name>.dem    reprojected/clipped/resampled mod10 hydro-corrected DEM
   <name>.rmap   runoff-zone id per TRITON cell (one zone per mHM L1 cell)
   <name>.roff   gridded runoff time series [mm/hr] per zone (from mHM Q)
-  <name>.extbc  outlet open-boundary segment (default: normal-slope / Manning)
+  <name>.extbc  open-boundary wrapping all 4 grid edges (default: normal-slope / Manning)
   <name>.obs    observation points at the mHM gauges
   <name>.cfg    TRITON configuration referencing the above
 
@@ -22,20 +22,25 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (NODATA, OUTPUT_CRS, TIMESTEP, WORKING_DIR,
+from config import (NODATA, OUTPUT_CRS, TIMESTEP, TRITON_HYDROGRAPH_INTERVAL_S, WORKING_DIR,
                     IO_MANNING_N,
                     TRITON_BF_CHANNEL_KM2, TRITON_BF_SLOPE_MIN, TRITON_BF_WIDTH_A,
                     TRITON_BF_WIDTH_B, TRITON_CHANNEL_MANN, TRITON_CONST_MANN,
                     TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME, TRITON_END_DATE,
-                    TRITON_EXTBC_SEG_LEN_M, TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
+                    TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
                     TRITON_INITH, TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
                     TRITON_OUT_DIR,
-                    TRITON_PRINT_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE)
+                    TRITON_MAPPING_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE,
+                    TRITON_WATERBODIES, TRITON_WATERBODY_LAYER_ID,
+                    TRITON_WATERBODY_MAX_H, TRITON_WATERBODY_BASE_H,
+                    TRITON_WATERBODY_EXCLUDE_FTYPES, TRITON_WATERBODY_LAKEPOND_STAGE,
+                    TRITON_WATERBODY_PATH, TRITON_WATERBODY_SERVICE_URL)
 
 from osgeo import gdal
 
 import esri_lulc
 import grid as gridmod
+import nhd_waterbodies
 import readers
 import writers
 
@@ -123,12 +128,11 @@ def main() -> int:
         log.info("Writing runoff time series ...")
         n_rows = writers.write_roff(runoff, valid, step_h, paths["roff"])
 
-    outlet = readers.find_outlet(facc_nc)
-    log.info("Outlet (max facc) at x=%.1f y=%.1f", *outlet)
-    num_extbc = 1
+    num_extbc = 4
     if not skip("extbc"):
-        num_extbc = writers.write_extbc(dem_grid, outlet, TRITON_EXTBC_TYPE,
-                                        TRITON_EXTBC_VALUE, TRITON_EXTBC_SEG_LEN_M, paths["extbc"])
+        num_extbc = writers.write_extbc(dem_grid, TRITON_EXTBC_TYPE,
+                                        TRITON_EXTBC_VALUE, paths["extbc"])
+    log.info("Open boundary wraps all 4 grid edges (num_extbc=%d)", num_extbc)
 
     gauges = readers.read_gauges(id_map)
     n_obs = len(gauges)
@@ -140,6 +144,7 @@ def main() -> int:
     fdir_hi = work / "mhm_input" / "dem" / "fdir.tif"
     lc_cache: dict = {}
     facc_g_cache: dict = {}
+    wb_cache: dict = {}
 
     def ensure_lc() -> dict:
         """Warp the land-cover raster onto the DEM grid once; cache lut + tif."""
@@ -168,8 +173,31 @@ def main() -> int:
             facc_g_cache.update(path=fg, cell_area=gridmod.pixel_area_m2(facc_hi))
         return facc_g_cache
 
+    def ensure_waterbodies() -> dict:
+        """Acquire waterbodies, rasterize to the DEM grid, and fill them to rim level."""
+        if not wb_cache:
+            vec = Path(TRITON_WATERBODY_PATH)
+            if not vec.exists() or args.force:
+                log.info("Acquiring NHDPlus HR waterbodies -> %s", vec)
+                nhd_waterbodies.acquire(Path(WATERSHED_FILE), OUTPUT_CRS, vec,
+                                        TRITON_WATERBODY_SERVICE_URL, TRITON_WATERBODY_LAYER_ID,
+                                        exclude_ftypes=TRITON_WATERBODY_EXCLUDE_FTYPES,
+                                        lakepond_stage=TRITON_WATERBODY_LAKEPOND_STAGE)
+            mask_tif = out / f"{name}_wb_{epsg}.tif"
+            if not mask_tif.exists() or args.force:
+                gridmod.rasterize_waterbodies_to_dem_grid(vec, dem_grid, mask_tif)
+            depth_tif = out / f"{name}_wbdepth_{epsg}.tif"
+            if not depth_tif.exists() or args.force:
+                stats = gridmod.build_waterbody_depth(dem_grid, mask_tif, depth_tif,
+                                                      TRITON_WATERBODY_MAX_H, TRITON_WATERBODY_BASE_H)
+                log.info("Waterbodies: %d pool(s), %d wet cell(s), max fill depth %.2f m",
+                         stats["n_pools"], stats["n_cells"], stats["max_depth_m"])
+            wb_cache.update(mask=mask_tif, depth=depth_tif)
+        return wb_cache
+
     # Channel roughness is burned into .mann using the same facc channel network.
     burn_channels = TRITON_INITH and TRITON_CHANNEL_MANN is not None
+    use_wb = TRITON_WATERBODIES
 
     mann_tif = Path(f'{paths["mann"]}.tif')
     mann_ready = paths["mann"].exists() and paths["mann"].stat().st_size > 0 and mann_tif.exists()
@@ -186,6 +214,9 @@ def main() -> int:
             fg = ensure_facc_g()
             burn_kwargs = dict(channel_facc_tif=fg["path"], channel_km2=TRITON_BF_CHANNEL_KM2,
                                cell_area_m2=fg["cell_area"], channel_n=TRITON_CHANNEL_MANN)
+        if use_wb:
+            burn_kwargs.update(waterbody_mask_tif=ensure_waterbodies()["mask"],
+                               water_n=TRITON_CHANNEL_MANN)
         n_burn = writers.write_mann(lc["tif"], dem_grid, lc["lut"], TRITON_CONST_MANN,
                                     lc["nod"], paths["mann"], **burn_kwargs)
         log.info("Manning GeoTIFF: %s", mann_tif.name)
@@ -224,8 +255,11 @@ def main() -> int:
                 dem_grid, facc_g, Path(slope_g), fdir_g, lc["tif"], lc["lut"], TRITON_CONST_MANN,
                 bf["rate"], ix1, iy1, cell_area, TRITON_BF_CHANNEL_KM2,
                 TRITON_BF_WIDTH_A, TRITON_BF_WIDTH_B, TRITON_BF_SLOPE_MIN,
-                paths["inith"], paths["initqx"], paths["inityq"])
+                paths["inith"], paths["initqx"], paths["inityq"],
+                wb_depth_tif=(ensure_waterbodies()["depth"] if use_wb else None))
             log.info("Initial-condition channel cells: %d", ic["n_chan"])
+            if use_wb:
+                log.info("Waterbody standing-water cells seeded: %d", ic["n_wb"])
             log.info("  depth h [m]      : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
                      *(ic["depth_m"][s] for s in ("min", "mean", "median", "p90", "max")))
             log.info("  unit q |q| [m2/s]: min=%.4f mean=%.4f median=%.4f p90=%.4f max=%.4f",
@@ -238,9 +272,18 @@ def main() -> int:
 
     sim_duration_s = int(n_rows * step_h * 3600)
     if not skip("cfg"):
-        writers.write_cfg(paths["cfg"], names, TRITON_PROJECTION, n_zones, n_rows,
-                          num_extbc, sim_duration_s, TRITON_PRINT_INTERVAL_S, TRITON_CONST_MANN,
-                          init_names=init_names)
+        writers.write_cfg(cfg_path=paths["cfg"],
+                          names=names,
+                          projection=TRITON_PROJECTION,
+                          num_runoffs=n_zones,
+                          runoff_rows=n_rows,
+                          num_extbc=num_extbc,
+                          sim_duration_s=sim_duration_s,
+                          mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
+                          obs_interval_s=TRITON_HYDROGRAPH_INTERVAL_S,
+                          const_mann=TRITON_CONST_MANN,
+                          init_names=init_names,
+                          )
 
     # cross-file consistency checks
     assert n_zones == int(zone_ids.max()), "zone id range does not match num_runoffs"

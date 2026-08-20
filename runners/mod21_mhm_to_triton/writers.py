@@ -9,7 +9,7 @@ import os
 import sys
 import math
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 from osgeo import gdal
@@ -89,15 +89,18 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
 def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
                const_mann: float, nodata_lc, mann_path: Path,
                channel_facc_tif: Path = None, channel_km2: float = None,
-               cell_area_m2: float = None, channel_n: float = None) -> int:
+               cell_area_m2: float = None, channel_n: float = None,
+               waterbody_mask_tif: Path = None, water_n: float = None) -> int:
     """Write the per-cell Manning grid [-] aligned to the DEM (headerless).
 
     Land-cover codes on the DEM grid are mapped to their RAT roughness; nodata
     or unmapped cells fall back to *const_mann*. When *channel_facc_tif* and
     *channel_n* are given, cells whose drainage area (facc x *cell_area_m2*)
     reaches *channel_km2* are overwritten with *channel_n* (channel roughness).
-    A GeoTIFF mirror (<mann_path>.tif) is written for inspection. Returns the
-    number of channel cells burned in.
+    When *waterbody_mask_tif* and *water_n* are given, known-waterbody cells are
+    finally overwritten with *water_n* (open-water roughness). A GeoTIFF mirror
+    (<mann_path>.tif) is written for inspection. Returns the number of channel
+    cells burned in.
     """
     ds = gdal.Open(str(lc_tif))
     band = ds.GetRasterBand(1)
@@ -114,6 +117,12 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
     if burn:
         dsf = gdal.Open(str(channel_facc_tif))
         bfacc = dsf.GetRasterBand(1)
+
+    burn_wb = waterbody_mask_tif is not None and water_n is not None
+    bwb = None
+    if burn_wb:
+        dsw = gdal.Open(str(waterbody_mask_tif))
+        bwb = dsw.GetRasterBand(1)
 
     # GeoTIFF mirror aligned to the DEM grid, for manual inspection
     cs = dem_grid["cellsize"]
@@ -138,6 +147,9 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
                 chan = (facc > NODATA + 1) & (facc * cell_area_m2 / 1e6 >= channel_km2)
                 out[chan] = channel_n
                 n_chan += int(chan.sum())
+            if burn_wb:
+                wb = bwb.ReadAsArray(0, j, ncols, 1)[0]
+                out[wb == 1] = water_n
             f.write(" ".join(np.char.mod("%.4f", out).tolist()))
             f.write("\n")
             tband.WriteArray(out.reshape(1, -1).astype(np.float32), 0, j)
@@ -146,38 +158,38 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
     ds = None
     if burn:
         dsf = None
+    if burn_wb:
+        dsw = None
     return n_chan
 
 
-def _snap_segment(grid: Dict, outlet: Tuple[float, float],
-                  seg_len: float) -> Tuple[float, float, float, float]:
-    """Snap the outlet to the nearest grid edge and return a segment on it."""
+def write_extbc(grid: Dict, bc_type: int, bc_value: float, extbc_path: Path) -> int:
+    """Write an open boundary wrapping all four grid edges; returns num_extbc (4).
+
+    TRITON only accepts boundary segments that lie on the rectangular grid edge
+    and are axis-aligned (see extbc.h check_extreme_extbc). To let water leave at
+    every perimeter cell we emit one full-length segment per edge (W, E, N, S),
+    each carrying *bc_type*/*bc_value*. Endpoints use edge cell-centre coordinates
+    so TRITON's calc_src_col/row map them to columns 0/ncols-1 and rows 0/nrows-1.
+    """
     cs = grid["cellsize"]
-    left, top = grid["x0"], grid["y0"]
-    right = left + grid["ncols"] * cs
-    bottom = top - grid["nrows"] * cs
-    ox, oy = outlet
-    d = {"left": abs(ox - left), "right": abs(ox - right),
-         "top": abs(oy - top), "bottom": abs(oy - bottom)}
-    edge = min(d, key=d.get)
-    half = seg_len / 2.0
-    if edge in ("left", "right"):
-        x = left if edge == "left" else right
-        yc = min(max(oy, bottom), top)
-        return x, min(max(yc - half, bottom), top), x, min(max(yc + half, bottom), top)
-    y = top if edge == "top" else bottom
-    xc = min(max(ox, left), right)
-    return min(max(xc - half, left), right), y, min(max(xc + half, left), right), y
-
-
-def write_extbc(grid: Dict, outlet: Tuple[float, float], bc_type: int,
-                bc_value: float, seg_len: float, extbc_path: Path) -> int:
-    """Write a single outlet boundary segment; returns num_extbc (1)."""
-    x1, y1, x2, y2 = _snap_segment(grid, outlet, seg_len)
+    x0, y0 = grid["x0"], grid["y0"]
+    ncols, nrows = grid["ncols"], grid["nrows"]
+    xw = x0 + 0.5 * cs                    # column 0 centre
+    xe = x0 + (ncols - 0.5) * cs          # column ncols-1 centre
+    yn = y0 - 0.5 * cs                    # row 0 (top) centre
+    ys = y0 - (nrows - 0.5) * cs          # row nrows-1 (bottom) centre
+    edges = [
+        (xw, yn, xw, ys),  # west
+        (xe, yn, xe, ys),  # east
+        (xw, yn, xe, yn),  # north
+        (xw, ys, xe, ys),  # south
+    ]
     with open(extbc_path, "w") as f:
         f.write("% BC Type, X1, Y1, X2, Y2, BC\n")
-        f.write(f"{bc_type},{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f},{bc_value}\n")
-    return 1
+        for x1, y1, x2, y2 in edges:
+            f.write(f"{bc_type},{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f},{bc_value}\n")
+    return len(edges)
 
 
 def write_obs(gauges: List[Dict], obs_path: Path) -> int:
@@ -204,14 +216,16 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
                              ix1: np.ndarray, iy1: np.ndarray, l0_cell_area_m2: float,
                              channel_km2: float, width_a: float, width_b: float,
                              slope_min: float, h_path: Path, qx_path: Path,
-                             qy_path: Path) -> Dict:
+                             qy_path: Path, wb_depth_tif: Path = None) -> Dict:
     """Seed initial depth/discharge in channel cells from mHM baseflow (Method A).
 
     For every channel cell (drainage area >= *channel_km2*) the accumulated
     baseflow discharge Q_b = pre-event baseflow rate x drainage area is converted
     to Manning normal depth h = (n Q_b / (w sqrt(S)))^(3/5), with width
     w = a A^b. The unit discharge Q_b/w is split along the D8 flow direction into
-    qx/qy so the channel starts already flowing.
+    qx/qy so the channel starts already flowing. When *wb_depth_tif* is given, its
+    fill-to-rim waterbody depth is merged into h (max), leaving qx/qy at zero for
+    standing-water cells that are not on a channel.
 
     Writes the headerless ASCII grids (aligned to the DEM) plus GeoTIFF mirrors
     for inspection, and returns the channel-cell count, the GeoTIFF paths, and
@@ -221,6 +235,9 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
     dss = gdal.Open(str(slope_tif)); bs = dss.GetRasterBand(1)
     dsd = gdal.Open(str(fdir_tif)); bd = dsd.GetRasterBand(1)
     dsl = gdal.Open(str(lc_tif)); bl = dsl.GetRasterBand(1)
+    bwb = None
+    if wb_depth_tif is not None:
+        dswb = gdal.Open(str(wb_depth_tif)); bwb = dswb.GetRasterBand(1)
     ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
 
     maxcode = max(c for c in mann_lut if c >= 0)
@@ -253,6 +270,7 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
 
     h_vals, q_vals, v_vals = [], [], []
     n_chan = 0
+    n_wb = 0
     with open(h_path, "w") as fh, open(qx_path, "w") as fqx, open(qy_path, "w") as fqy:
         for j in range(nrows):
             facc = bf.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
@@ -288,6 +306,12 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
                 q_vals.append(q_unit)
                 v_vals.append(q_unit / np.maximum(hc, 1e-9))       # m s-1
 
+            if bwb is not None:
+                wbh = bwb.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
+                wbh = np.where(np.isfinite(wbh), wbh, 0.0)
+                n_wb += int(((wbh > 0) & (h <= 0)).sum())
+                h = np.maximum(h, wbh)  # qx/qy stay 0 for standing water off-channel
+
             fh.write(" ".join(np.char.mod("%.4f", h).tolist())); fh.write("\n")
             fqx.write(" ".join(np.char.mod("%.6g", qx).tolist())); fqx.write("\n")
             fqy.write(" ".join(np.char.mod("%.6g", qy).tolist())); fqy.write("\n")
@@ -298,10 +322,13 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
         d.FlushCache()
     th = tqx = tqy = None
     dsf = dss = dsd = dsl = None
+    if bwb is not None:
+        dswb = None
 
     cat = lambda parts: np.concatenate(parts) if parts else np.zeros(0)
     return {
         "n_chan": n_chan,
+        "n_wb": n_wb,
         "tifs": tifs,
         "depth_m": _series_stats(cat(h_vals)),
         "unit_q_m2s": _series_stats(cat(q_vals)),
@@ -309,10 +336,17 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
     }
 
 
-def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
-              num_runoffs: int, runoff_rows: int, num_extbc: int,
-              sim_duration_s: int, print_interval_s: int,
-              const_mann: float, init_names: Optional[Dict[str, str]] = None) -> None:
+def write_cfg(cfg_path: Path,
+              names: Dict[str, str],
+              projection: str,
+              num_runoffs: int,
+              runoff_rows: int,
+              num_extbc: int,
+              sim_duration_s: int,
+              mapping_interval_s: int,
+              obs_interval_s: int,
+              const_mann: float,
+              init_names: Optional[Dict[str, str]] = None) -> None:
     """Write the TRITON configuration tying the generated inputs together."""
     rel = lambda key: f"input/{names['domain']}/{names[key]}"
     ic = init_names or {}
@@ -352,6 +386,7 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         "# Observation points (mHM gauges)",
         "time_series_flag=1",
         f'observation_loc_file="{rel("obs")}"',
+        f'print_observation={obs_interval_s}',
         "",
         "# Initial conditions (mHM pre-event baseflow warm start)",
         f'h_infile="{h_file}"',
@@ -361,15 +396,15 @@ def write_cfg(cfg_path: Path, names: Dict[str, str], projection: str,
         "it_count=0",
         "gpu_direct_flag=0",
         "domain_decomposition=dynamic",
-        "factor_interval_domain_decomposition=10",
+        "factor_interval_domain_decomposition=1",
         "open_boundaries=1",
-        "print_option=huv",
+        "print_option=h",
         "max_value_print_option=h",
         "sim_start_time=0",
         f"sim_duration={sim_duration_s}",
         "checkpoint_id=0",
         "time_increment_fixed=0",
-        f"print_interval={print_interval_s}",
+        f"print_interval={mapping_interval_s}",
         "courant=0.5",
         "hextra=0.001",
         "",

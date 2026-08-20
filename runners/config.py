@@ -30,10 +30,10 @@ TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton_input"  # d
 TRITON_DOMAIN_NAME     = "eastfork_whitewater"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
 TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
-TRITON_EXTBC_TYPE      = 2            # default outlet boundary: 2 = normal slope (velocity from bed slope + Manning roughness)
+TRITON_EXTBC_TYPE      = 2            # open boundary wrapping all 4 grid edges: 2 = normal slope (velocity from bed slope + Manning roughness)
 TRITON_EXTBC_VALUE     = 0.001        # value for the boundary condition; for type 2 this is the bed slope [-]
-TRITON_EXTBC_SEG_LEN_M = 2000         # length [m] of the auto-derived outlet boundary segment
-TRITON_PRINT_INTERVAL_S = 900         # TRITON spatial output interval [s]
+TRITON_MAPPING_INTERVAL_S = 1800         # TRITON spatial output interval [s]
+TRITON_HYDROGRAPH_INTERVAL_S = 900     # TRITON hydrograph output interval [s]
 TRITON_CONST_MANN      = 0.060        # fallback constant Manning roughness used where land cover is unavailable
 TRITON_CHANNEL_MANN    = 0.038         # roughness burned into .mann for channel cells (facc >= TRITON_BF_CHANNEL_KM2); None disables
 TRITON_IO_LULC_PATH    = f"{TRITON_OUT_DIR}/io_lulc.tif"  # cached ESRI/IO 10 m land-cover raster (auto-acquired by mod22 when missing)
@@ -58,6 +58,16 @@ TRITON_BF_WIDTH_A      = 3.0          # channel width w = a * A^b [m] with drain
 TRITON_BF_WIDTH_B      = 0.5          # width exponent b
 TRITON_BF_SLOPE_MIN    = 1e-4         # floor on bed slope [m/m] in the Manning normal-depth calculation
 
+# --- TRITON known-waterbody acquisition + init integration (mod21) ---
+TRITON_WATERBODIES         = True      # acquire NHDPlus HR waterbodies and seed them wet in the init fields + .mann
+TRITON_WATERBODY_SERVICE_URL = "https://services5.arcgis.com/7weheFjxuNkGGiZi/arcgis/rest/services/National_Hydrography_Dataset_Plus_High_Resolution/FeatureServer"  # ESRI FeatureServer root
+TRITON_WATERBODY_LAYER_ID  = 1         # layer id of "Waterbodies and Areas" (polygons) on the FeatureServer
+TRITON_WATERBODY_PATH      = f"{TRITON_OUT_DIR}/waterbodies.gpkg"  # cached waterbody polygons (auto-acquired by mod21 when missing)
+TRITON_WATERBODY_MAX_H     = 10.0      # cap [m] on the fill-to-rim initial depth inside a waterbody
+TRITON_WATERBODY_BASE_H    = 0.3       # guaranteed warm-start depth [m] for every mapped waterbody cell (whole polygon reads wet)
+TRITON_WATERBODY_EXCLUDE_FTYPES = ("SwampMarsh", "Wetland", "Inundation Area")  # NHD Feature_Type classes to drop before rasterizing
+TRITON_WATERBODY_LAKEPOND_STAGE = "Stage = Normal Pool"      # keep LakePonds only if their FCode description contains this text; None disables
+
 # --- TRITON output -> map configuration (mod22) ---
 TRITON_MAP_GTIFF_DIR   = f"{WORKING_DIR}/triton_output/gtiff"  # directory holding the per-timestep TRITON GeoTIFFs (<VAR>_<NN>_<MM>.tif + <VAR>_<NN>.vrt)
 TRITON_MAP_OUT_DIR     = f"{WORKING_DIR}/triton_output/maps"   # directory that receives the consolidated netCDFs and pixel-max GeoTIFFs
@@ -65,3 +75,17 @@ TRITON_MAP_CFG         = f"{WORKING_DIR}/triton_output/cfg/config_1.cfg"  # TRIT
 TRITON_MAP_HMIN        = 0.01         # water-depth floor [m] below which velocity is undefined (masked to NODATA)
 TRITON_MAP_MIN_DEPTH   = 0.01         # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
 TRITON_MAP_CLIP        = f"{WORKING_DIR}/mhm_input/domain/watershed.geojson"  # polygon boundary the maps are clipped to (cells outside -> NODATA); None/"" disables
+TRITON_MAP_DEM_TIF     = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}_dem_{OUTPUT_CRS.split(':')[-1]}.tif"  # mod21's warped DEM, reused as the GIF hillshade background
+
+# --- TRITON H/MH/V GIF animations (mod22 --gif) ---
+TRITON_GIF_VARS        = ("H", "MH", "V")   # variables animated as GIFs
+TRITON_GIF_FPS         = 8            # playback frame rate
+TRITON_GIF_CMAP        = {"H": "Blues", "MH": "PuBu", "V": "viridis"}  # colormap per variable
+TRITON_GIF_MAX_FRAMES  = 200          # evenly-strided timestep cap per GIF (bounds render time/file size on long runs)
+TRITON_GIF_MAX_DIM     = None         # optional cap [px] on the larger grid dimension for GIF rendering; None disables spatial downsampling
+
+# --- TRITON performance diagnostics (mod22 --perf) ---
+TRITON_PERF_SUMMARY    = f"{WORKING_DIR}/triton_output/performance.txt"       # final per-rank timing summary
+TRITON_PERF_DIR        = f"{WORKING_DIR}/triton_output/performance"          # per-print-step cumulative timing files (performanceN.txt)
+TRITON_PERF_WET_VAR    = "H"          # variable used for the wet-cell/volume overlay (must have a cached <var>.nc)
+TRITON_PERF_ROFF       = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}.roff"       # gridded runoff time series driving TRITON (mod21 output)

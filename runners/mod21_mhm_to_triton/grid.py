@@ -18,6 +18,7 @@ import geopandas as gpd
 import numpy as np
 import xarray as xr
 from osgeo import gdal, osr
+from scipy import ndimage
 from shapely.geometry import MultiPolygon, Polygon
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -171,6 +172,89 @@ def pixel_area_m2(tif: Path) -> float:
     m_per_deg_lat = 111320.0
     m_per_deg_lon = 111320.0 * math.cos(math.radians(cy))
     return abs(gt[1]) * m_per_deg_lon * abs(gt[5]) * m_per_deg_lat
+
+
+def rasterize_waterbodies_to_dem_grid(vector_path: Path, dem_grid: Dict, out_tif: Path,
+                                      all_touched: bool = True) -> Path:
+    """Burn waterbody polygons onto the exact DEM grid -> uint8 mask (1 = water)."""
+    cs = dem_grid["cellsize"]
+    ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
+    xmin, ymax = dem_grid["x0"], dem_grid["y0"]
+    xmax, ymin = xmin + ncols * cs, ymax - nrows * cs
+    tif = gdal.GetDriverByName("GTiff").Create(
+        str(out_tif), ncols, nrows, 1, gdal.GDT_Byte,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+    tif.SetGeoTransform((xmin, cs, 0.0, ymax, 0.0, -cs))
+    tif.SetProjection(gdal.Open(str(dem_grid["tif"])).GetProjection())
+    tif.GetRasterBand(1).Fill(0)
+    src = gdal.OpenEx(str(vector_path), gdal.OF_VECTOR)
+    if src is not None and src.GetLayer(0).GetFeatureCount() > 0:
+        opts = ["ALL_TOUCHED=TRUE"] if all_touched else []
+        gdal.RasterizeLayer(tif, [1], src.GetLayer(0), burn_values=[1], options=opts)
+    src = None
+    tif.FlushCache()
+    tif = None
+    return Path(out_tif)
+
+
+def build_waterbody_depth(dem_grid: Dict, wb_mask_tif: Path, out_tif: Path,
+                          max_h: float, base_h: float) -> Dict:
+    """Fill each waterbody to its rim/DEM level and write an initial-depth GeoTIFF.
+
+    Connected waterbody cells form one pool; its water-surface level is the lowest
+    DEM elevation on the pool's one-cell rim (the spill point), or the pool's own
+    maximum where no valid rim exists. Depth = level - DEM, clamped to [0, *max_h*].
+    Every mapped waterbody cell is then floored to *base_h* so the full polygon
+    reads wet (mapped water is not a DEM depression everywhere), while the DEM
+    still adds variable depth along the deeper thalweg. Returns the GeoTIFF path
+    plus pool/cell counts and the maximum seeded depth.
+    """
+    ds = gdal.Open(str(dem_grid["tif"]))
+    dem = ds.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    prj = ds.GetProjection()
+    ds = None
+    dm = gdal.Open(str(wb_mask_tif))
+    mask = dm.GetRasterBand(1).ReadAsArray()
+    dm = None
+
+    valid = np.isfinite(dem) & (dem != NODATA)
+    pools = (mask == 1) & valid
+    depth = np.zeros(dem.shape, dtype=np.float64)
+    n_pools = n_cells = 0
+    if pools.any():
+        structure = np.ones((3, 3), dtype=bool)  # 8-connectivity
+        labels, _ = ndimage.label(pools, structure=structure)
+        ny, nx = dem.shape
+        for lbl, sl in enumerate(ndimage.find_objects(labels), start=1):
+            if sl is None:
+                continue
+            r0, r1 = max(sl[0].start - 1, 0), min(sl[0].stop + 1, ny)
+            c0, c1 = max(sl[1].start - 1, 0), min(sl[1].stop + 1, nx)
+            sub_dem = dem[r0:r1, c0:c1]
+            sub_valid = valid[r0:r1, c0:c1]
+            pool = labels[r0:r1, c0:c1] == lbl
+            rim = ndimage.binary_dilation(pool, structure=structure) & ~pool & sub_valid
+            level = float(sub_dem[rim].min()) if rim.any() else float(sub_dem[pool].max())
+            d = np.clip(level - sub_dem, 0.0, max_h)
+            d[pool] = np.maximum(d[pool], base_h)  # guarantee every mapped water cell is wet
+            d[~pool] = 0.0
+            depth[r0:r1, c0:c1] = np.maximum(depth[r0:r1, c0:c1], d)
+            n_pools += 1
+            n_cells += int(pool.sum())
+
+    cs = dem_grid["cellsize"]
+    tif = gdal.GetDriverByName("GTiff").Create(
+        str(out_tif), dem_grid["ncols"], dem_grid["nrows"], 1, gdal.GDT_Float32,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+    tif.SetGeoTransform((dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs))
+    tif.SetProjection(prj)
+    tif.GetRasterBand(1).SetNoDataValue(0.0)
+    tif.GetRasterBand(1).WriteArray(depth.astype(np.float32))
+    tif.FlushCache()
+    tif = None
+    return {"tif": Path(out_tif), "n_pools": n_pools, "n_cells": n_cells,
+            "max_depth_m": float(depth.max()) if n_cells else 0.0}
+
 
 
 def build_zones(runoff: Dict) -> Tuple[np.ndarray, np.ndarray, int]:

@@ -13,6 +13,13 @@ space-time cube is streamed one timestep at a time, so arbitrarily long/large
 TRITON runs are handled without loading the whole cube into memory. Outputs keep
 the native CRS and grid of the TRITON ``.vrt`` (no reprojection).
 
+H.gif/MH.gif/V.gif animations are also rendered over a DEM hillshade, subsampled
+to a bounded number of frames spanning the full run. TRITON's performance.txt/
+performance/*.txt timing logs are turned into a load-balance figure and a
+per-step time series (next to the H wet-cell/volume series when available) ->
+perf_load_balance.png, perf_timeseries.png. Both steps skip gracefully (with a
+warning) when their required inputs (DEM, clip, performance logs) are missing.
+
 Run order: a TRITON run producing gtiff outputs -> mod22.
 """
 from __future__ import annotations
@@ -27,10 +34,16 @@ from typing import Callable, Dict, List
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (NODATA, TRITON_MAP_CFG, TRITON_MAP_CLIP,
+from config import (L1_CELL_SIZE_M, NODATA, TRITON_GIF_CMAP, TRITON_GIF_FPS,
+                    TRITON_GIF_MAX_FRAMES, TRITON_GIF_VARS,
+                    TRITON_MAP_CFG, TRITON_MAP_CLIP, TRITON_MAP_DEM_TIF,
                     TRITON_MAP_GTIFF_DIR, TRITON_MAP_HMIN, TRITON_MAP_MIN_DEPTH,
-                    TRITON_MAP_OUT_DIR, TRITON_START_DATE)
+                    TRITON_MAP_OUT_DIR, TRITON_PERF_DIR, TRITON_PERF_ROFF,
+                    TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR, TRITON_START_DATE)
 
+import gifs
+import perf
+import perf_plots
 import readers
 import writers
 
@@ -53,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--remax", action="store_true", help="rebuild only the max GeoTIFF from the cached netCDF (skips re-reading the gtiffs)")
     p.add_argument("--clip", default=TRITON_MAP_CLIP, help="watershed polygon to clip maps to (cells outside -> NODATA); empty string disables")
     p.add_argument("--force", action="store_true", help="regenerate outputs even if they already exist")
+    p.add_argument("--gif-fps", type=int, default=TRITON_GIF_FPS, help="GIF playback frame rate")
+    p.add_argument("--gif-max-frames", type=int, default=TRITON_GIF_MAX_FRAMES, help="evenly-strided timestep cap per GIF")
+    p.add_argument("--dem", default=TRITON_MAP_DEM_TIF, help="DEM GeoTIFF used as the GIF hillshade background")
+    p.add_argument("--perf-summary", default=TRITON_PERF_SUMMARY, help="TRITON performance.txt final per-rank summary")
+    p.add_argument("--perf-dir", default=TRITON_PERF_DIR, help="directory of TRITON performanceN.txt per-step timing files")
+    p.add_argument("--roff", default=TRITON_PERF_ROFF, help="TRITON .roff gridded runoff input (domain applied-runoff overlay)")
     return p.parse_args()
 
 
@@ -171,6 +190,49 @@ def main() -> int:
         _consolidate("V", producer_v, n, grid, times, out, args.force, args.remax, mask)
     else:
         log.warning("QX/QY (and H) not all present; skipping velocity (V).")
+
+    dem = Path(args.dem)
+    if not dem.exists():
+        log.warning("GIF DEM not found: %s; skipping GIF animations.", dem)
+    else:
+        hillshade = readers.read_hillshade(dem, grid)
+        boundary = readers.read_boundary_line(Path(args.clip), grid) if args.clip else None
+        for var in TRITON_GIF_VARS:
+            nc_path = out / f"{var}.nc"
+            gif_path = out / f"{var}.gif"
+            if not nc_path.exists():
+                log.warning("%s not found; skipping GIF for %s.", nc_path.name, var)
+                continue
+            if gif_path.exists() and not args.force:
+                log.info("Skip (exists): %s", gif_path.name)
+                continue
+            n_used = gifs.make_gif(nc_path, var, grid, hillshade, boundary,
+                                   TRITON_GIF_CMAP[var], args.gif_fps, NODATA, gif_path,
+                                   args.gif_max_frames)
+            log.info("Wrote %s (%d frames)", gif_path.name, n_used)
+
+    summary_path = Path(args.perf_summary)
+    perf_dir = Path(args.perf_dir)
+    if not summary_path.exists() or not perf_dir.is_dir():
+        log.warning("TRITON performance logs not found (%s / %s); skipping performance diagnostics.",
+                   summary_path, perf_dir)
+    else:
+        balance_png = out / "perf_load_balance.png"
+        perf_plots.plot_load_balance(perf.read_summary(summary_path), balance_png)
+        log.info("Wrote %s", balance_png.name)
+
+        deltas = perf.step_deltas(perf.read_series(perf_dir))
+        wet_nc = out / f"{TRITON_PERF_WET_VAR}.nc"
+        wet = perf.wet_stats(wet_nc, TRITON_PERF_WET_VAR, NODATA) if wet_nc.exists() else None
+        if wet is None:
+            log.warning("%s not found; per-step time series will omit the wet-cell overlay.", wet_nc.name)
+        roff_path = Path(args.roff)
+        roff = perf.read_roff(roff_path, L1_CELL_SIZE_M) if roff_path.exists() else None
+        if roff is None:
+            log.warning("%s not found; per-step time series will omit the applied-runoff overlay.", roff_path.name)
+        timeseries_png = out / "perf_timeseries.png"
+        perf_plots.plot_timeseries(deltas, wet, timeseries_png, roff)
+        log.info("Wrote %s", timeseries_png.name)
 
     log.info("Done. Maps written to %s", out)
     return 0

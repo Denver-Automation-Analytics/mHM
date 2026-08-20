@@ -124,6 +124,39 @@ def build_watershed_mask(watershed_file: Path, grid: Dict) -> np.ndarray:
     return mask
 
 
+def read_hillshade(dem_tif: Path, grid: Dict) -> np.ndarray:
+    """Return a hillshade (ny, nx) aligned to *grid*, computed from *dem_tif*.
+
+    The DEM is hillshaded natively then warped onto the target grid's transform,
+    size and CRS so it lines up pixel-for-pixel even if the source extent differs.
+    """
+    hs = gdal.DEMProcessing("", str(dem_tif), "hillshade", format="MEM")
+    ny, nx = grid["ny"], grid["nx"]
+    warped = gdal.Warp("", hs, format="MEM", width=nx, height=ny,
+                       outputBounds=_grid_bounds(grid),
+                       dstSRS=grid.get("wkt") or None, resampleAlg="bilinear")
+    hs = None
+    arr = warped.GetRasterBand(1).ReadAsArray().astype(np.float32)
+    warped = None
+    return arr
+
+
+def _grid_bounds(grid: Dict) -> tuple:
+    """Return (minx, miny, maxx, maxy) of *grid* from its geotransform + size."""
+    x0, dx, _, y0, _, dy = grid["gt"]
+    nx, ny = grid["nx"], grid["ny"]
+    x1, y1 = x0 + nx * dx, y0 + ny * dy
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def read_boundary_line(clip_path: Path, grid: Dict):
+    """Return the *clip_path* polygon boundary (line geometries) in *grid*'s CRS."""
+    import geopandas as gpd
+
+    dom = gpd.read_file(clip_path).to_crs(grid["epsg"] or grid["wkt"])
+    return dom.boundary
+
+
 def max_from_netcdf(nc_path: Path, var: str, nodata: float) -> np.ndarray:
     """Return the pixel-maximum (ny, nx) over time from a cached netCDF cube.
 
