@@ -30,8 +30,6 @@ TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton_input"  # d
 TRITON_DOMAIN_NAME     = "eastfork_whitewater"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
 TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
-TRITON_EXTBC_TYPE      = 2            # single open outlet on the downstream grid edge (nearest the max-flow-accumulation cell); other 3 edges stay closed walls. 2 = normal slope (velocity from bed slope + Manning roughness)
-TRITON_EXTBC_VALUE     = 0.001        # value for the boundary condition; for type 2 this is the bed slope [-]
 TRITON_MAPPING_INTERVAL_S = 1800         # TRITON spatial output interval [s]
 TRITON_HYDROGRAPH_INTERVAL_S = 900     # TRITON hydrograph output interval [s]
 TRITON_COURANT         = 0.25          # CFL stability factor (0.5 = 50% of the max stable timestep)
@@ -53,8 +51,11 @@ IO_MANNING_N = {
     9:  0.030,  # Snow/Ice
     11: 0.040,  # Rangeland
 }
-TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; None = full mHM record
+TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
 TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
+TRITON_AUTO_START      = True         # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
+TRITON_ONSET_MM_HR     = 0.5          # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
+TRITON_START_FILE      = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes
 TRITON_WARM_START      = False         # produce warm-start init files (inith/initqx/inityq) seeding channel depth/discharge from mHM pre-event baseflow; False = cold start (no init files, cfg omits them)
 TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
 TRITON_BF_WIDTH_A      = 3.0          # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)

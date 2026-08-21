@@ -6,7 +6,6 @@ that drive the TRITON 2D hydraulic model:
   <name>.dem    reprojected/clipped/resampled mod10 hydro-corrected DEM
   <name>.rmap   runoff-zone id per TRITON cell (one zone per mHM L1 cell)
   <name>.roff   gridded runoff time series [mm/hr] per zone (from mHM Q)
-  <name>.extbc  single open outlet on the downstream grid edge (default: normal-slope / Manning)
   <name>.obs    observation points at the mHM gauges
   <name>.cfg    TRITON configuration referencing the above
 
@@ -29,8 +28,8 @@ from config import (NODATA, OUTPUT_CRS, TIMESTEP, TRITON_HYDROGRAPH_INTERVAL_S, 
                     TRITON_DECOMP_FACTOR,
                     TRITON_DECOMP_TYPE,
                     TRITON_COURANT,
+                    TRITON_AUTO_START, TRITON_ONSET_MM_HR, TRITON_START_FILE,
                     TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME, TRITON_END_DATE,
-                    TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
                     TRITON_INIT_FILL, TRITON_INIT_FILL_MAX_H,
                     TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
                     TRITON_MAP_HMIN,
@@ -82,14 +81,13 @@ def main() -> int:
 
     flux_nc = work / "mhm_output" / "mHM_Fluxes_States.nc"
     src_dem = work / "mhm_input" / "dem" / "dem_corrected.tif"
-    facc_nc = work / "mhm_input" / "morph" / "facc.nc"
     id_map = work / "mhm_input" / "gauge" / "id_map.csv"
-    for pth in (flux_nc, src_dem, facc_nc, id_map):
+    for pth in (flux_nc, src_dem, id_map):
         if not pth.exists():
             log.error("Required input missing: %s", pth)
             return 1
 
-    keys = ("dem", "rmap", "roff", "extbc", "obs", "mann", "inith", "initqx", "inityq", "cfg")
+    keys = ("dem", "rmap", "roff", "obs", "mann", "inith", "initqx", "inityq", "cfg")
     paths = {k: out / f"{name}.{k}" for k in keys}
     names = {"domain": name, **{k: f"{name}.{k}" for k in keys if k != "cfg"}}
     epsg = OUTPUT_CRS.split(":")[-1]
@@ -108,6 +106,25 @@ def main() -> int:
              runoff["units"], runoff["time"].size,
              str(runoff["time"][0])[:10], str(runoff["time"][-1])[:10],
              runoff["easting"].size, runoff["northing"].size, runoff["cellsize"])
+
+    # Auto start: drop the pre-event steps so TRITON only simulates from one mHM
+    # step before runoff onset (dry/baseflow-only steps are wasted computation).
+    if TRITON_AUTO_START:
+        oi = readers.runoff_onset_index(runoff, step_h, TRITON_ONSET_MM_HR)
+        if oi is None:
+            log.warning("Runoff never reaches onset threshold %.3f mm/hr in the window; keeping start %s.",
+                        TRITON_ONSET_MM_HR, str(runoff["time"][0])[:16])
+        elif oi <= 1:
+            log.info("Runoff onset at/near window start; no trimming (start %s).", str(runoff["time"][0])[:16])
+        else:
+            si = oi - 1  # exactly one step before the driver begins
+            onset_t = runoff["time"][oi]
+            runoff = readers.trim_runoff(runoff, si)
+            log.info("Auto start: runoff onset (>=%.3f mm/hr) at %s -> sim start one step earlier at %s (skipped %d step(s))",
+                     TRITON_ONSET_MM_HR, str(onset_t)[:16], str(runoff["time"][0])[:16], si)
+    eff_start = str(runoff["time"][0].isoformat())
+    Path(TRITON_START_FILE).parent.mkdir(parents=True, exist_ok=True)
+    Path(TRITON_START_FILE).write_text(eff_start + "\n")
 
     warped_tif = out / f"{name}_dem_{epsg}.tif"
     if warped_tif.exists() and not args.force:
@@ -132,13 +149,6 @@ def main() -> int:
     if not skip("roff"):
         log.info("Writing runoff time series ...")
         n_rows = writers.write_roff(runoff, valid, step_h, paths["roff"])
-
-    num_extbc = 1
-    if not skip("extbc"):
-        outlet = readers.find_outlet(facc_nc)
-        num_extbc, outlet_edge = writers.write_extbc(dem_grid, TRITON_EXTBC_TYPE,
-                                                     TRITON_EXTBC_VALUE, paths["extbc"], outlet)
-        log.info("Downstream-only outlet boundary on the %s edge (num_extbc=%d)", outlet_edge, num_extbc)
 
     gauges = readers.read_gauges(id_map)
     n_obs = len(gauges)
@@ -249,7 +259,7 @@ def main() -> int:
             facc_g = fg["path"]
             fdir_g = gridmod.warp_to_dem_grid(fdir_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
                         dem_grid, out / f"{name}_fdir_{epsg}.tif", resample="near", dst_nodata=0)
-            bf = readers.read_baseflow_preevent(flux_nc, start_date=args.start_date)
+            bf = readers.read_baseflow_preevent(flux_nc, start_date=eff_start)
             log.info("Pre-event baseflow step: %s | source cell area %.1f m2", str(bf["time"])[:16], cell_area)
             ic = writers.write_initial_conditions(
                 dem_grid, facc_g, Path(slope_g), fdir_g, lc["tif"], lc["lut"], TRITON_CONST_MANN,
@@ -278,7 +288,6 @@ def main() -> int:
                           projection=TRITON_PROJECTION,
                           num_runoffs=n_zones,
                           runoff_rows=n_rows,
-                          num_extbc=num_extbc,
                           sim_duration_s=sim_duration_s,
                           mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
                           obs_interval_s=TRITON_HYDROGRAPH_INTERVAL_S,
@@ -292,8 +301,8 @@ def main() -> int:
     # cross-file consistency checks
     assert n_zones == int(zone_ids.max()), "zone id range does not match num_runoffs"
     log.info("Done. TRITON inputs written to %s", out)
-    log.info("  num_runoffs=%d runoff_row_size=%d num_extbc=%d obs=%d sim_duration=%ds",
-             n_zones, n_rows, num_extbc, n_obs, sim_duration_s)
+    log.info("  num_runoffs=%d runoff_row_size=%d obs=%d sim_duration=%ds",
+             n_zones, n_rows, n_obs, sim_duration_s)
     return 0
 
 

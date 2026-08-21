@@ -165,45 +165,6 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
     return n_chan
 
 
-def write_extbc(grid: Dict, bc_type: int, bc_value: float, extbc_path: Path,
-                outlet: Tuple[float, float]) -> Tuple[int, str]:
-    """Write a single open outlet boundary on the downstream grid edge.
-
-    Returns ``(num_extbc, edge_name)`` with ``num_extbc == 1``. TRITON only
-    accepts boundary segments that lie on the rectangular grid edge and are
-    axis-aligned (see extbc.h check_extreme_extbc). To route water out at the
-    downstream outlet only, we emit one full-length segment on whichever edge
-    (W, E, N, S) the *outlet* (max flow-accumulation cell) is closest to; the
-    other three edges stay closed walls so water leaves solely at the downstream
-    boundary. Endpoints use edge cell-centre coordinates so TRITON's
-    calc_src_col/row map them to columns 0/ncols-1 and rows 0/nrows-1.
-    """
-    cs = grid["cellsize"]
-    x0, y0 = grid["x0"], grid["y0"]
-    ncols, nrows = grid["ncols"], grid["nrows"]
-    xw = x0 + 0.5 * cs                    # column 0 centre
-    xe = x0 + (ncols - 0.5) * cs          # column ncols-1 centre
-    yn = y0 - 0.5 * cs                    # row 0 (top) centre
-    ys = y0 - (nrows - 0.5) * cs          # row nrows-1 (bottom) centre
-    ox, oy = outlet
-    col = (ox - x0) / cs
-    row = (y0 - oy) / cs
-    dist = {"west": col, "east": (ncols - 1) - col,
-            "north": row, "south": (nrows - 1) - row}
-    edge = min(dist, key=dist.get)
-    segs = {
-        "west":  (xw, yn, xw, ys),
-        "east":  (xe, yn, xe, ys),
-        "north": (xw, yn, xe, yn),
-        "south": (xw, ys, xe, ys),
-    }
-    x1, y1, x2, y2 = segs[edge]
-    with open(extbc_path, "w") as f:
-        f.write("% BC Type, X1, Y1, X2, Y2, BC\n")
-        f.write(f"{bc_type},{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f},{bc_value}\n")
-    return 1, edge
-
-
 def write_obs(gauges: List[Dict], obs_path: Path) -> int:
     """Write projected gauge coordinates as TRITON observation points."""
     with open(obs_path, "w") as f:
@@ -407,7 +368,6 @@ def write_cfg(cfg_path: Path,
               projection: str,
               num_runoffs: int,
               runoff_rows: int,
-              num_extbc: int,
               sim_duration_s: int,
               mapping_interval_s: int,
               obs_interval_s: int,
@@ -447,10 +407,10 @@ def write_cfg(cfg_path: Path,
         f'runoff_filename="{rel("roff")}"',
         f'runoff_map="{rel("rmap")}"',
         "",
-        "# External (outlet) boundary",
-        f"num_extbc={num_extbc}",
-        f'extbc_dir="input/{names["domain"]}/"',
-        f'extbc_file="{rel("extbc")}"',
+        "# No external boundary; the domain drains through open ghost cells (open_boundaries=1)",
+        "num_extbc=0",
+        'extbc_dir=""',
+        'extbc_file=""',
         "",
         "# Observation points (mHM gauges)",
         "time_series_flag=1",

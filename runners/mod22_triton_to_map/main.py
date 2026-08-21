@@ -40,7 +40,7 @@ from config import (L1_CELL_SIZE_M, NODATA, TRITON_GIF_CMAP, TRITON_GIF_FPS,
                     TRITON_MAP_GTIFF_DIR, TRITON_MAP_HMIN, TRITON_MAP_MIN_DEPTH,
                     TRITON_MAP_OUT_DIR, TRITON_MAP_SERIES_DIR, TRITON_PERF_DIR,
                     TRITON_PERF_ROFF, TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR,
-                    TRITON_START_DATE)
+                    TRITON_START_DATE, TRITON_START_FILE)
 
 import gifs
 import perf
@@ -63,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", default=TRITON_MAP_OUT_DIR, help="output directory for netCDF + max GeoTIFFs")
     p.add_argument("--cfg", default=TRITON_MAP_CFG, help="TRITON .cfg parsed for print_interval")
     p.add_argument("--start-date", default=TRITON_START_DATE, help="anchor date 'YYYY-MM-DD' for the time axis")
+    p.add_argument("--start-file", default=TRITON_START_FILE, help="sidecar with the mod21-resolved sim start datetime; overrides --start-date when present")
     p.add_argument("--hmin", type=float, default=TRITON_MAP_HMIN, help="depth floor [m] below which velocity is masked")
     p.add_argument("--min-depth", type=float, default=TRITON_MAP_MIN_DEPTH, help="depth floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)")
     p.add_argument("--remax", action="store_true", help="rebuild only the max GeoTIFF from the cached netCDF (skips re-reading the gtiffs)")
@@ -134,6 +135,11 @@ def main() -> int:
         log.error("No TRITON gtiff series (<VAR>_<NN>.vrt) found in %s", gtiff)
         return 1
     log.info("Variables present: %s", ", ".join(f"{v}({len(p)})" for v, p in avail.items()))
+
+    start_file = Path(args.start_file) if args.start_file else None
+    if start_file and start_file.exists():
+        args.start_date = start_file.read_text().strip()
+        log.info("Anchoring time axis to mod21-resolved sim start %s (from %s)", args.start_date, start_file.name)
 
     interval = readers.parse_print_interval(Path(args.cfg))
     log.info("Output cadence: print_interval=%ds, time anchored at %s", interval, args.start_date)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -70,17 +70,27 @@ def read_runoff(flux_nc: Path, start=None, end=None) -> Dict:
     }
 
 
-def find_outlet(facc_nc: Path) -> Tuple[float, float]:
-    """Return the (x, y) [m, OUTPUT_CRS] of the maximum flow-accumulation cell."""
-    with xr.open_dataset(facc_nc) as ds:
-        facc = np.asarray(ds["facc"].values, dtype=float)
-        x = np.asarray(ds["x"].values, dtype=float)
-        y = np.asarray(ds["y"].values, dtype=float)
-    facc = np.where(facc <= -9990.0, np.nan, facc)
-    if not np.isfinite(facc).any():
-        raise ValueError(f"No valid flow-accumulation values in {facc_nc}.")
-    iy, ix = np.unravel_index(np.nanargmax(facc), facc.shape)
-    return float(x[ix]), float(y[iy])
+def runoff_onset_index(runoff: Dict, step_h: int, threshold_mm_hr: float) -> Optional[int]:
+    """Index of the first step whose domain-mean runoff intensity >= threshold.
+
+    The mHM runoff cube (mm per output step) is converted to a mm/hr intensity
+    (value / *step_h*) and averaged over the valid (finite) cells each step, so
+    the metric matches the domain-mean runoff shown in the mod22 forcing panel.
+    Returns None when no step in the window reaches *threshold_mm_hr*.
+    """
+    vals = runoff["da"].values.reshape(runoff["time"].size, -1)
+    mean = np.nanmean(np.where(np.isfinite(vals), vals, np.nan), axis=1) / float(step_h)
+    hits = np.where(mean >= threshold_mm_hr)[0]
+    return int(hits[0]) if hits.size else None
+
+
+def trim_runoff(runoff: Dict, start_index: int) -> Dict:
+    """Return *runoff* restricted to time steps ``[start_index:]`` (grid unchanged)."""
+    da = runoff["da"].isel(time=slice(start_index, None))
+    trimmed = dict(runoff)
+    trimmed["da"] = da
+    trimmed["time"] = pd.DatetimeIndex(da["time"].values)
+    return trimmed
 
 
 def read_gauges(id_map_csv: Path) -> List[Dict]:
