@@ -30,10 +30,13 @@ TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton_input"  # d
 TRITON_DOMAIN_NAME     = "eastfork_whitewater"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
 TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
-TRITON_EXTBC_TYPE      = 2            # open boundary wrapping all 4 grid edges: 2 = normal slope (velocity from bed slope + Manning roughness)
+TRITON_EXTBC_TYPE      = 2            # single open outlet on the downstream grid edge (nearest the max-flow-accumulation cell); other 3 edges stay closed walls. 2 = normal slope (velocity from bed slope + Manning roughness)
 TRITON_EXTBC_VALUE     = 0.001        # value for the boundary condition; for type 2 this is the bed slope [-]
 TRITON_MAPPING_INTERVAL_S = 1800         # TRITON spatial output interval [s]
 TRITON_HYDROGRAPH_INTERVAL_S = 900     # TRITON hydrograph output interval [s]
+TRITON_COURANT         = 0.25          # CFL stability factor (0.5 = 50% of the max stable timestep)
+TRITON_DECOMP_TYPE     = "static"     # domain decomposition: "static" (single partition) or "dynamic" (multi-partition, MPI+CUDA)
+TRITON_DECOMP_FACTOR   = 4           # dynamic domain-decomposition re-partition interval; 1 (every step) trips a CUDA illegal-address bug, >=10 is stable
 TRITON_CONST_MANN      = 0.060        # fallback constant Manning roughness used where land cover is unavailable
 TRITON_CHANNEL_MANN    = 0.038         # roughness burned into .mann for channel cells (facc >= TRITON_BF_CHANNEL_KM2); None disables
 TRITON_IO_LULC_PATH    = f"{TRITON_OUT_DIR}/io_lulc.tif"  # cached ESRI/IO 10 m land-cover raster (auto-acquired by mod22 when missing)
@@ -52,11 +55,13 @@ IO_MANNING_N = {
 }
 TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; None = full mHM record
 TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
-TRITON_INITH           = True         # warm-start channels: seed initial depth/discharge (h,qx,qy) from mHM pre-event baseflow
+TRITON_WARM_START      = False         # produce warm-start init files (inith/initqx/inityq) seeding channel depth/discharge from mHM pre-event baseflow; False = cold start (no init files, cfg omits them)
 TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
 TRITON_BF_WIDTH_A      = 3.0          # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)
 TRITON_BF_WIDTH_B      = 0.5          # width exponent b
 TRITON_BF_SLOPE_MIN    = 1e-4         # floor on bed slope [m/m] in the Manning normal-depth calculation
+TRITON_INIT_FILL       = True         # expand the baseflow channel seed outward to fill DEM channel storage (False = seed-only)
+TRITON_INIT_FILL_MAX_H = 0.1          # cap [m] on the level-pool fill depth grown from channel seeds (anti-runaway on flat terrain)
 
 # --- TRITON known-waterbody acquisition + init integration (mod21) ---
 TRITON_WATERBODIES         = True      # acquire NHDPlus HR waterbodies and seed them wet in the init fields + .mann
@@ -73,15 +78,16 @@ TRITON_MAP_GTIFF_DIR   = f"{WORKING_DIR}/triton_output/gtiff"  # directory holdi
 TRITON_MAP_OUT_DIR     = f"{WORKING_DIR}/triton_output/maps"   # directory that receives the consolidated netCDFs and pixel-max GeoTIFFs
 TRITON_MAP_CFG         = f"{WORKING_DIR}/triton_output/cfg/config_1.cfg"  # TRITON .cfg parsed for print_interval (output cadence in seconds)
 TRITON_MAP_HMIN        = 0.01         # water-depth floor [m] below which velocity is undefined (masked to NODATA)
-TRITON_MAP_MIN_DEPTH   = 0.01         # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
+TRITON_MAP_MIN_DEPTH   = 0.01        # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
 TRITON_MAP_CLIP        = f"{WORKING_DIR}/mhm_input/domain/watershed.geojson"  # polygon boundary the maps are clipped to (cells outside -> NODATA); None/"" disables
 TRITON_MAP_DEM_TIF     = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}_dem_{OUTPUT_CRS.split(':')[-1]}.tif"  # mod21's warped DEM, reused as the GIF hillshade background
+TRITON_MAP_SERIES_DIR  = f"{WORKING_DIR}/triton_output/series"  # directory of TRITON stage time-series files (<name>_at_Xsec.txt) at the observation points
 
 # --- TRITON H/MH/V GIF animations (mod22 --gif) ---
 TRITON_GIF_VARS        = ("H", "MH", "V")   # variables animated as GIFs
 TRITON_GIF_FPS         = 8            # playback frame rate
 TRITON_GIF_CMAP        = {"H": "Blues", "MH": "PuBu", "V": "viridis"}  # colormap per variable
-TRITON_GIF_MAX_FRAMES  = 200          # evenly-strided timestep cap per GIF (bounds render time/file size on long runs)
+TRITON_GIF_MAX_FRAMES  = None          # evenly-strided timestep cap per GIF (bounds render time/file size on long runs)
 TRITON_GIF_MAX_DIM     = None         # optional cap [px] on the larger grid dimension for GIF rendering; None disables spatial downsampling
 
 # --- TRITON performance diagnostics (mod22 --perf) ---

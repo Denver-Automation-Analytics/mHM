@@ -36,7 +36,10 @@ from writers import VAR_META
 
 def _frame_indices(n: int, max_frames: int) -> np.ndarray:
     """Evenly-spaced, de-duplicated timestep indices spanning the full run."""
-    return np.unique(np.linspace(0, n - 1, min(n, max_frames)).round().astype(int))
+    if max_frames is None or n <= max_frames:
+        return np.arange(n)
+    else:
+        return np.unique(np.linspace(0, n - 1, min(n, max_frames)).round().astype(int))
 
 
 def make_gif(nc_path: Path, var: str, grid: Dict, hillshade: np.ndarray,

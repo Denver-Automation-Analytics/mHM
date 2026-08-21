@@ -38,13 +38,15 @@ from config import (L1_CELL_SIZE_M, NODATA, TRITON_GIF_CMAP, TRITON_GIF_FPS,
                     TRITON_GIF_MAX_FRAMES, TRITON_GIF_VARS,
                     TRITON_MAP_CFG, TRITON_MAP_CLIP, TRITON_MAP_DEM_TIF,
                     TRITON_MAP_GTIFF_DIR, TRITON_MAP_HMIN, TRITON_MAP_MIN_DEPTH,
-                    TRITON_MAP_OUT_DIR, TRITON_PERF_DIR, TRITON_PERF_ROFF,
-                    TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR, TRITON_START_DATE)
+                    TRITON_MAP_OUT_DIR, TRITON_MAP_SERIES_DIR, TRITON_PERF_DIR,
+                    TRITON_PERF_ROFF, TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR,
+                    TRITON_START_DATE)
 
 import gifs
 import perf
 import perf_plots
 import readers
+import series
 import writers
 
 logging.basicConfig(
@@ -72,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--perf-summary", default=TRITON_PERF_SUMMARY, help="TRITON performance.txt final per-rank summary")
     p.add_argument("--perf-dir", default=TRITON_PERF_DIR, help="directory of TRITON performanceN.txt per-step timing files")
     p.add_argument("--roff", default=TRITON_PERF_ROFF, help="TRITON .roff gridded runoff input (domain applied-runoff overlay)")
+    p.add_argument("--series-dir", default=TRITON_MAP_SERIES_DIR, help="directory of TRITON stage time-series files (<name>_at_Xsec.txt)")
     return p.parse_args()
 
 
@@ -231,8 +234,19 @@ def main() -> int:
         if roff is None:
             log.warning("%s not found; per-step time series will omit the applied-runoff overlay.", roff_path.name)
         timeseries_png = out / "perf_timeseries.png"
-        perf_plots.plot_timeseries(deltas, wet, timeseries_png, roff)
+        perf_plots.plot_timeseries(deltas, wet, timeseries_png, roff,
+                                   start_date=args.start_date, interval_s=interval)
         log.info("Wrote %s", timeseries_png.name)
+
+    series_dir = Path(args.series_dir)
+    series_files = series.discover_series(series_dir) if series_dir.is_dir() else []
+    if not series_files:
+        log.warning("No TRITON stage time-series files found in %s; skipping stage hydrographs.", series_dir)
+    else:
+        for sf in series_files:
+            stage_png = out / f"stage_{sf.stem}.png"
+            n_pts = series.plot_stage_hydrographs(sf, stage_png, args.start_date)
+            log.info("Wrote %s (%d monitoring point(s))", stage_png.name, n_pts)
 
     log.info("Done. Maps written to %s", out)
     return 0

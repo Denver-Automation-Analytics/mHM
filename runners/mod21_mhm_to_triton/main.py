@@ -6,7 +6,7 @@ that drive the TRITON 2D hydraulic model:
   <name>.dem    reprojected/clipped/resampled mod10 hydro-corrected DEM
   <name>.rmap   runoff-zone id per TRITON cell (one zone per mHM L1 cell)
   <name>.roff   gridded runoff time series [mm/hr] per zone (from mHM Q)
-  <name>.extbc  open-boundary wrapping all 4 grid edges (default: normal-slope / Manning)
+  <name>.extbc  single open outlet on the downstream grid edge (default: normal-slope / Manning)
   <name>.obs    observation points at the mHM gauges
   <name>.cfg    TRITON configuration referencing the above
 
@@ -26,13 +26,18 @@ from config import (NODATA, OUTPUT_CRS, TIMESTEP, TRITON_HYDROGRAPH_INTERVAL_S, 
                     IO_MANNING_N,
                     TRITON_BF_CHANNEL_KM2, TRITON_BF_SLOPE_MIN, TRITON_BF_WIDTH_A,
                     TRITON_BF_WIDTH_B, TRITON_CHANNEL_MANN, TRITON_CONST_MANN,
+                    TRITON_DECOMP_FACTOR,
+                    TRITON_DECOMP_TYPE,
+                    TRITON_COURANT,
                     TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME, TRITON_END_DATE,
                     TRITON_EXTBC_TYPE, TRITON_EXTBC_VALUE,
-                    TRITON_INITH, TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
+                    TRITON_INIT_FILL, TRITON_INIT_FILL_MAX_H,
+                    TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
+                    TRITON_MAP_HMIN,
                     TRITON_OUT_DIR,
                     TRITON_MAPPING_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE,
+                    TRITON_WARM_START,
                     TRITON_WATERBODIES, TRITON_WATERBODY_LAYER_ID,
-                    TRITON_WATERBODY_MAX_H, TRITON_WATERBODY_BASE_H,
                     TRITON_WATERBODY_EXCLUDE_FTYPES, TRITON_WATERBODY_LAKEPOND_STAGE,
                     TRITON_WATERBODY_PATH, TRITON_WATERBODY_SERVICE_URL)
 
@@ -128,11 +133,12 @@ def main() -> int:
         log.info("Writing runoff time series ...")
         n_rows = writers.write_roff(runoff, valid, step_h, paths["roff"])
 
-    num_extbc = 4
+    num_extbc = 1
     if not skip("extbc"):
-        num_extbc = writers.write_extbc(dem_grid, TRITON_EXTBC_TYPE,
-                                        TRITON_EXTBC_VALUE, paths["extbc"])
-    log.info("Open boundary wraps all 4 grid edges (num_extbc=%d)", num_extbc)
+        outlet = readers.find_outlet(facc_nc)
+        num_extbc, outlet_edge = writers.write_extbc(dem_grid, TRITON_EXTBC_TYPE,
+                                                     TRITON_EXTBC_VALUE, paths["extbc"], outlet)
+        log.info("Downstream-only outlet boundary on the %s edge (num_extbc=%d)", outlet_edge, num_extbc)
 
     gauges = readers.read_gauges(id_map)
     n_obs = len(gauges)
@@ -174,7 +180,7 @@ def main() -> int:
         return facc_g_cache
 
     def ensure_waterbodies() -> dict:
-        """Acquire waterbodies, rasterize to the DEM grid, and fill them to rim level."""
+        """Acquire waterbodies and rasterize them to the DEM grid (open-water .mann mask)."""
         if not wb_cache:
             vec = Path(TRITON_WATERBODY_PATH)
             if not vec.exists() or args.force:
@@ -186,17 +192,11 @@ def main() -> int:
             mask_tif = out / f"{name}_wb_{epsg}.tif"
             if not mask_tif.exists() or args.force:
                 gridmod.rasterize_waterbodies_to_dem_grid(vec, dem_grid, mask_tif)
-            depth_tif = out / f"{name}_wbdepth_{epsg}.tif"
-            if not depth_tif.exists() or args.force:
-                stats = gridmod.build_waterbody_depth(dem_grid, mask_tif, depth_tif,
-                                                      TRITON_WATERBODY_MAX_H, TRITON_WATERBODY_BASE_H)
-                log.info("Waterbodies: %d pool(s), %d wet cell(s), max fill depth %.2f m",
-                         stats["n_pools"], stats["n_cells"], stats["max_depth_m"])
-            wb_cache.update(mask=mask_tif, depth=depth_tif)
+            wb_cache.update(mask=mask_tif)
         return wb_cache
 
     # Channel roughness is burned into .mann using the same facc channel network.
-    burn_channels = TRITON_INITH and TRITON_CHANNEL_MANN is not None
+    burn_channels = TRITON_CHANNEL_MANN is not None
     use_wb = TRITON_WATERBODIES
 
     mann_tif = Path(f'{paths["mann"]}.tif')
@@ -225,7 +225,7 @@ def main() -> int:
                      TRITON_CHANNEL_MANN, n_burn, paths["mann"].name)
 
     init_names = None
-    if TRITON_INITH:
+    if TRITON_WARM_START:
         ic_keys = ("inith", "initqx", "inityq")
         ic_files = [paths[k] for k in ic_keys] + [Path(f"{paths[k]}.tif") for k in ic_keys]
         ready = all(p.exists() and p.stat().st_size > 0 for p in ic_files)
@@ -256,10 +256,11 @@ def main() -> int:
                 bf["rate"], ix1, iy1, cell_area, TRITON_BF_CHANNEL_KM2,
                 TRITON_BF_WIDTH_A, TRITON_BF_WIDTH_B, TRITON_BF_SLOPE_MIN,
                 paths["inith"], paths["initqx"], paths["inityq"],
-                wb_depth_tif=(ensure_waterbodies()["depth"] if use_wb else None))
-            log.info("Initial-condition channel cells: %d", ic["n_chan"])
-            if use_wb:
-                log.info("Waterbody standing-water cells seeded: %d", ic["n_wb"])
+                do_fill=TRITON_INIT_FILL, fill_max_h=TRITON_INIT_FILL_MAX_H,
+                min_h=TRITON_MAP_HMIN)
+            log.info("Initial-condition channel seed cells: %d", ic["n_chan"])
+            if TRITON_INIT_FILL:
+                log.info("Filled channel-storage cells: %d (cap %.1f m)", ic["n_fill"], TRITON_INIT_FILL_MAX_H)
             log.info("  depth h [m]      : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
                      *(ic["depth_m"][s] for s in ("min", "mean", "median", "p90", "max")))
             log.info("  unit q |q| [m2/s]: min=%.4f mean=%.4f median=%.4f p90=%.4f max=%.4f",
@@ -282,6 +283,9 @@ def main() -> int:
                           mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
                           obs_interval_s=TRITON_HYDROGRAPH_INTERVAL_S,
                           const_mann=TRITON_CONST_MANN,
+                          decomp_factor=TRITON_DECOMP_FACTOR,
+                          decomp_type=TRITON_DECOMP_TYPE,
+                          courant=TRITON_COURANT,
                           init_names=init_names,
                           )
 

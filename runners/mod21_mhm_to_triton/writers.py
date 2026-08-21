@@ -8,11 +8,13 @@ from __future__ import annotations
 import os
 import sys
 import math
+import heapq
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from osgeo import gdal
+from scipy import ndimage
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from config import NODATA
@@ -163,14 +165,18 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
     return n_chan
 
 
-def write_extbc(grid: Dict, bc_type: int, bc_value: float, extbc_path: Path) -> int:
-    """Write an open boundary wrapping all four grid edges; returns num_extbc (4).
+def write_extbc(grid: Dict, bc_type: int, bc_value: float, extbc_path: Path,
+                outlet: Tuple[float, float]) -> Tuple[int, str]:
+    """Write a single open outlet boundary on the downstream grid edge.
 
-    TRITON only accepts boundary segments that lie on the rectangular grid edge
-    and are axis-aligned (see extbc.h check_extreme_extbc). To let water leave at
-    every perimeter cell we emit one full-length segment per edge (W, E, N, S),
-    each carrying *bc_type*/*bc_value*. Endpoints use edge cell-centre coordinates
-    so TRITON's calc_src_col/row map them to columns 0/ncols-1 and rows 0/nrows-1.
+    Returns ``(num_extbc, edge_name)`` with ``num_extbc == 1``. TRITON only
+    accepts boundary segments that lie on the rectangular grid edge and are
+    axis-aligned (see extbc.h check_extreme_extbc). To route water out at the
+    downstream outlet only, we emit one full-length segment on whichever edge
+    (W, E, N, S) the *outlet* (max flow-accumulation cell) is closest to; the
+    other three edges stay closed walls so water leaves solely at the downstream
+    boundary. Endpoints use edge cell-centre coordinates so TRITON's
+    calc_src_col/row map them to columns 0/ncols-1 and rows 0/nrows-1.
     """
     cs = grid["cellsize"]
     x0, y0 = grid["x0"], grid["y0"]
@@ -179,17 +185,23 @@ def write_extbc(grid: Dict, bc_type: int, bc_value: float, extbc_path: Path) -> 
     xe = x0 + (ncols - 0.5) * cs          # column ncols-1 centre
     yn = y0 - 0.5 * cs                    # row 0 (top) centre
     ys = y0 - (nrows - 0.5) * cs          # row nrows-1 (bottom) centre
-    edges = [
-        (xw, yn, xw, ys),  # west
-        (xe, yn, xe, ys),  # east
-        (xw, yn, xe, yn),  # north
-        (xw, ys, xe, ys),  # south
-    ]
+    ox, oy = outlet
+    col = (ox - x0) / cs
+    row = (y0 - oy) / cs
+    dist = {"west": col, "east": (ncols - 1) - col,
+            "north": row, "south": (nrows - 1) - row}
+    edge = min(dist, key=dist.get)
+    segs = {
+        "west":  (xw, yn, xw, ys),
+        "east":  (xe, yn, xe, ys),
+        "north": (xw, yn, xe, yn),
+        "south": (xw, ys, xe, ys),
+    }
+    x1, y1, x2, y2 = segs[edge]
     with open(extbc_path, "w") as f:
         f.write("% BC Type, X1, Y1, X2, Y2, BC\n")
-        for x1, y1, x2, y2 in edges:
-            f.write(f"{bc_type},{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f},{bc_value}\n")
-    return len(edges)
+        f.write(f"{bc_type},{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f},{bc_value}\n")
+    return 1, edge
 
 
 def write_obs(gauges: List[Dict], obs_path: Path) -> int:
@@ -216,29 +228,31 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
                              ix1: np.ndarray, iy1: np.ndarray, l0_cell_area_m2: float,
                              channel_km2: float, width_a: float, width_b: float,
                              slope_min: float, h_path: Path, qx_path: Path,
-                             qy_path: Path, wb_depth_tif: Path = None) -> Dict:
-    """Seed initial depth/discharge in channel cells from mHM baseflow (Method A).
+                             qy_path: Path, do_fill: bool = True,
+                             fill_max_h: float = 5.0, min_h: float = 0.0) -> Dict:
+    """Seed initial depth/discharge from mHM baseflow, then fill the DEM channel storage.
 
     For every channel cell (drainage area >= *channel_km2*) the accumulated
     baseflow discharge Q_b = pre-event baseflow rate x drainage area is converted
-    to Manning normal depth h = (n Q_b / (w sqrt(S)))^(3/5), with width
-    w = a A^b. The unit discharge Q_b/w is split along the D8 flow direction into
-    qx/qy so the channel starts already flowing. When *wb_depth_tif* is given, its
-    fill-to-rim waterbody depth is merged into h (max), leaving qx/qy at zero for
-    standing-water cells that are not on a channel.
+    to Manning normal depth h = (n Q_b / (w sqrt(S)))^(3/5), with width w = a A^b;
+    the unit discharge Q_b/w is split along the D8 flow direction into qx/qy. These
+    seeded cells define a water-surface elevation WSE = DEM + h.
 
-    Writes the headerless ASCII grids (aligned to the DEM) plus GeoTIFF mirrors
-    for inspection, and returns the channel-cell count, the GeoTIFF paths, and
-    depth/unit-discharge/velocity statistics over the channel cells.
+    When *do_fill* is set, a level-pool priority flood grows each seed outward into
+    8-neighbours whose DEM lies below the reaching WSE (taking the max WSE across
+    seeds), stopping at DEM rims or once the fill depth exceeds *fill_max_h*. The
+    resulting depth field (inith) is the authoritative product; its wet mask then
+    drives qx/qy: every wet cell inherits the full velocity vector of its nearest
+    channel seed (Voronoi fill), so the qx/qy coverage matches h exactly. Cells
+    thinner than *min_h* are dropped from the mask so none carries flow over a
+    near-zero depth.
+
+    Writes the headerless ASCII grids (aligned to the DEM) plus GeoTIFF mirrors for
+    inspection, and returns the seed-cell count, the filled-cell count, the GeoTIFF
+    paths, and depth/unit-discharge/velocity statistics over the wet cells.
     """
-    dsf = gdal.Open(str(facc_tif)); bf = dsf.GetRasterBand(1)
-    dss = gdal.Open(str(slope_tif)); bs = dss.GetRasterBand(1)
-    dsd = gdal.Open(str(fdir_tif)); bd = dsd.GetRasterBand(1)
-    dsl = gdal.Open(str(lc_tif)); bl = dsl.GetRasterBand(1)
-    bwb = None
-    if wb_depth_tif is not None:
-        dswb = gdal.Open(str(wb_depth_tif)); bwb = dswb.GetRasterBand(1)
     ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
+    cs = dem_grid["cellsize"]
 
     maxcode = max(c for c in mann_lut if c >= 0)
     ntab = np.full(maxcode + 1, const_mann, dtype=np.float64)
@@ -251,88 +265,140 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
         norm = math.hypot(ux, uy)
         d8x[code], d8y[code] = ux / norm, uy / norm
 
-    # GeoTIFF mirrors aligned to the DEM grid, for manual inspection (0 = dry/off-channel)
-    prj = gdal.Open(str(dem_grid["tif"])).GetProjection()
-    cs = dem_grid["cellsize"]
+    # Full-array reads: the level-pool flood needs the whole grid in memory at once.
+    dsdem = gdal.Open(str(dem_grid["tif"]))
+    dem = dsdem.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    prj = dsdem.GetProjection()
+    dsdem = None
+    dsf = gdal.Open(str(facc_tif)); facc = dsf.GetRasterBand(1).ReadAsArray().astype(np.float64); dsf = None
+    dss = gdal.Open(str(slope_tif)); slope = dss.GetRasterBand(1).ReadAsArray().astype(np.float64); dss = None
+    dsd = gdal.Open(str(fdir_tif)); fdir = dsd.GetRasterBand(1).ReadAsArray(); dsd = None
+    dsl = gdal.Open(str(lc_tif)); lc = dsl.GetRasterBand(1).ReadAsArray().astype(np.int64); dsl = None
+
+    valid_dem = np.isfinite(dem) & (dem != NODATA)
+
+    # Map the L1 baseflow rate onto the DEM grid via the per-axis L1 index arrays.
+    valid_row = iy1 >= 0
+    valid_col = ix1 >= 0
+    rr = np.where(valid_row, iy1, 0)
+    cc = np.where(valid_col, ix1, 0)
+    qbrow = qb_rate[np.ix_(rr, cc)].astype(np.float64)
+    qbrow[~(valid_row[:, None] & valid_col[None, :])] = 0.0
+
+    a_m2 = facc * l0_cell_area_m2
+    a_km2 = a_m2 / 1e6
+    seed = ((facc > NODATA + 1) & (slope > NODATA + 1) &
+            (a_km2 >= channel_km2) & (qbrow > 0) & valid_dem)
+
+    h = np.zeros((nrows, ncols), dtype=np.float64)
+    qx = np.zeros((nrows, ncols), dtype=np.float64)  # seed velocities (later filled over the h mask)
+    qy = np.zeros((nrows, ncols), dtype=np.float64)
+
+    if seed.any():
+        qb = qbrow[seed] * a_m2[seed]                          # m3 s-1
+        w = np.maximum(width_a * np.power(a_km2[seed], width_b), 1e-3)
+        s = np.maximum(np.tan(np.radians(slope[seed])), slope_min)
+        nch = ntab[np.clip(lc[seed], 0, maxcode)]
+        hc = np.power(nch * qb / (w * np.sqrt(s)), 0.6)
+        q_unit = qb / w                                        # m2 s-1
+        code = np.clip(fdir[seed].astype(np.int64), 0, 128)
+        h[seed] = hc
+        qx[seed] = q_unit * d8x[code]
+        qy[seed] = q_unit * d8y[code]
+
+    # inith is the authoritative product: its wet mask drives the qx/qy extent below.
+    wet = seed.copy()
+    if do_fill and seed.any():
+        # Level-pool priority flood: process the highest reaching WSE first so each
+        # cell settles at the maximum seed water level able to reach it below the cap.
+        wse = np.full((nrows, ncols), -np.inf, dtype=np.float64)
+        heap: list = []
+        sr, sc = np.nonzero(seed)
+        for r, c in zip(sr.tolist(), sc.tolist()):
+            W = dem[r, c] + h[r, c]
+            wse[r, c] = W
+            heapq.heappush(heap, (-W, r, c))
+
+        neigh = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
+        while heap:
+            negW, r, c = heapq.heappop(heap)
+            W = -negW
+            if wse[r, c] > W:                                  # stale (lower) entry
+                continue
+            for dr, dc in neigh:
+                nr, nc = r + dr, c + dc
+                if nr < 0 or nr >= nrows or nc < 0 or nc >= ncols:
+                    continue
+                if not valid_dem[nr, nc]:
+                    continue
+                dn = dem[nr, nc]
+                if dn >= W or (W - dn) > fill_max_h:            # rim reached / depth cap
+                    continue
+                if wse[nr, nc] >= W:                           # already at >= this level
+                    continue
+                wse[nr, nc] = W
+                heapq.heappush(heap, (-W, nr, nc))
+
+        wet = np.isfinite(wse)
+        h = np.where(wet, np.clip(wse - dem, 0.0, fill_max_h), 0.0)
+
+    # Drop paper-thin cells (depth < min_h) so no wet cell carries a finite discharge
+    # over a near-zero depth (which would blow up |q|/h at TRITON's first step).
+    if min_h > 0.0:
+        wet = wet & (h >= min_h)
+        h = np.where(wet, h, 0.0)
+
+    # Fill qx/qy over the exact inith mask: every wet cell inherits the full velocity
+    # vector of its nearest channel seed (Voronoi fill), so qx/qy cover matches h.
+    if seed.any():
+        _, (iy, ix) = ndimage.distance_transform_edt(~seed, return_indices=True)
+        qxf = np.zeros((nrows, ncols), dtype=np.float64)
+        qyf = np.zeros((nrows, ncols), dtype=np.float64)
+        qxf[wet] = qx[iy[wet], ix[wet]]
+        qyf[wet] = qy[iy[wet], ix[wet]]
+        qx, qy = qxf, qyf
+
+    n_chan = int((seed & wet).sum())
+    n_fill = int(wet.sum()) - n_chan
+
+    # Hard guarantee that h/qx/qy share one wet/dry footprint: h is nonzero exactly on
+    # the wet cells and qx/qy are zero wherever h is dry (their own axis-aligned zeros
+    # inside the wet area are physical and expected).
+    dry = ~wet
+    assert np.array_equal(h != 0.0, wet), "init h nonzero footprint disagrees with the wet mask"
+    assert not qx[dry].any() and not qy[dry].any(), "init qx/qy are nonzero on h-dry cells"
+
+    # GeoTIFF mirrors aligned to the DEM grid, for manual inspection (0 = dry).
     gt = (dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs)
     drv = gdal.GetDriverByName("GTiff")
     co = ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"]
     tifs = {"h": Path(f"{h_path}.tif"), "qx": Path(f"{qx_path}.tif"), "qy": Path(f"{qy_path}.tif")}
 
-    def _new_tif(path: Path):
+    def _write_tif(path: Path, arr: np.ndarray) -> None:
         d = drv.Create(str(path), ncols, nrows, 1, gdal.GDT_Float32, co)
         d.SetGeoTransform(gt); d.SetProjection(prj)
         d.GetRasterBand(1).SetNoDataValue(0.0)
-        return d
+        d.GetRasterBand(1).WriteArray(arr.astype(np.float32))
+        d.FlushCache()
 
-    th, tqx, tqy = _new_tif(tifs["h"]), _new_tif(tifs["qx"]), _new_tif(tifs["qy"])
-    bth, btqx, btqy = th.GetRasterBand(1), tqx.GetRasterBand(1), tqy.GetRasterBand(1)
-
-    h_vals, q_vals, v_vals = [], [], []
-    n_chan = 0
-    n_wb = 0
     with open(h_path, "w") as fh, open(qx_path, "w") as fqx, open(qy_path, "w") as fqy:
         for j in range(nrows):
-            facc = bf.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
-            slope = bs.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
-            fdir = bd.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
-            lc = bl.ReadAsArray(0, j, ncols, 1)[0].astype(np.int64)
-            h = np.zeros(ncols, dtype=np.float64)
-            qx = np.zeros(ncols, dtype=np.float64)
-            qy = np.zeros(ncols, dtype=np.float64)
+            fh.write(" ".join(np.char.mod("%.4f", h[j]).tolist())); fh.write("\n")
+            fqx.write(" ".join(np.char.mod("%.6g", qx[j]).tolist())); fqx.write("\n")
+            fqy.write(" ".join(np.char.mod("%.6g", qy[j]).tolist())); fqy.write("\n")
+    _write_tif(tifs["h"], h)
+    _write_tif(tifs["qx"], qx)
+    _write_tif(tifs["qy"], qy)
 
-            a_m2 = facc * l0_cell_area_m2
-            a_km2 = a_m2 / 1e6
-            qbrow = np.zeros(ncols, dtype=np.float64)
-            jy = iy1[j]
-            if jy >= 0:
-                ok = ix1 >= 0
-                qbrow[ok] = qb_rate[jy, ix1[ok]]
-
-            chan = (facc > NODATA + 1) & (slope > NODATA + 1) & (a_km2 >= channel_km2) & (qbrow > 0)
-            if chan.any():
-                qb = qbrow[chan] * a_m2[chan]                      # m3 s-1
-                w = np.maximum(width_a * np.power(a_km2[chan], width_b), 1e-3)
-                s = np.maximum(np.tan(np.radians(slope[chan])), slope_min)
-                nch = ntab[np.clip(lc[chan], 0, maxcode)]
-                hc = np.power(nch * qb / (w * np.sqrt(s)), 0.6)
-                q_unit = qb / w                                    # m2 s-1
-                code = np.clip(fdir[chan].astype(np.int64), 0, 128)
-                h[chan] = hc
-                qx[chan] = q_unit * d8x[code]
-                qy[chan] = q_unit * d8y[code]
-                n_chan += int(chan.sum())
-                h_vals.append(hc)
-                q_vals.append(q_unit)
-                v_vals.append(q_unit / np.maximum(hc, 1e-9))       # m s-1
-
-            if bwb is not None:
-                wbh = bwb.ReadAsArray(0, j, ncols, 1)[0].astype(np.float64)
-                wbh = np.where(np.isfinite(wbh), wbh, 0.0)
-                n_wb += int(((wbh > 0) & (h <= 0)).sum())
-                h = np.maximum(h, wbh)  # qx/qy stay 0 for standing water off-channel
-
-            fh.write(" ".join(np.char.mod("%.4f", h).tolist())); fh.write("\n")
-            fqx.write(" ".join(np.char.mod("%.6g", qx).tolist())); fqx.write("\n")
-            fqy.write(" ".join(np.char.mod("%.6g", qy).tolist())); fqy.write("\n")
-            bth.WriteArray(h.reshape(1, -1).astype(np.float32), 0, j)
-            btqx.WriteArray(qx.reshape(1, -1).astype(np.float32), 0, j)
-            btqy.WriteArray(qy.reshape(1, -1).astype(np.float32), 0, j)
-    for d in (th, tqx, tqy):
-        d.FlushCache()
-    th = tqx = tqy = None
-    dsf = dss = dsd = dsl = None
-    if bwb is not None:
-        dswb = None
-
-    cat = lambda parts: np.concatenate(parts) if parts else np.zeros(0)
+    qmag = np.hypot(qx[wet], qy[wet])
+    h_wet = h[wet]
     return {
         "n_chan": n_chan,
-        "n_wb": n_wb,
+        "n_fill": n_fill,
         "tifs": tifs,
-        "depth_m": _series_stats(cat(h_vals)),
-        "unit_q_m2s": _series_stats(cat(q_vals)),
-        "velocity_ms": _series_stats(cat(v_vals)),
+        "depth_m": _series_stats(h_wet),
+        "unit_q_m2s": _series_stats(qmag),
+        "velocity_ms": _series_stats(qmag / np.maximum(h_wet, 1e-9)),
     }
 
 
@@ -346,6 +412,9 @@ def write_cfg(cfg_path: Path,
               mapping_interval_s: int,
               obs_interval_s: int,
               const_mann: float,
+              decomp_factor: int = 10,
+              decomp_type: str = "static",
+              courant: float = 0.5,
               init_names: Optional[Dict[str, str]] = None) -> None:
     """Write the TRITON configuration tying the generated inputs together."""
     rel = lambda key: f"input/{names['domain']}/{names[key]}"
@@ -395,8 +464,8 @@ def write_cfg(cfg_path: Path,
         "",
         "it_count=0",
         "gpu_direct_flag=0",
-        "domain_decomposition=dynamic",
-        "factor_interval_domain_decomposition=1",
+        f"domain_decomposition={decomp_type}",
+        f"factor_interval_domain_decomposition={decomp_factor}",
         "open_boundaries=1",
         "print_option=h",
         "max_value_print_option=h",
@@ -405,7 +474,7 @@ def write_cfg(cfg_path: Path,
         "checkpoint_id=0",
         "time_increment_fixed=0",
         f"print_interval={mapping_interval_s}",
-        "courant=0.5",
+        f"courant={courant}",
         "hextra=0.001",
         "",
     ]
