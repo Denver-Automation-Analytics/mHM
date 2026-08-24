@@ -22,6 +22,7 @@ def clip_mosaic(
     output_file: str | None = None,
     nodata: float = NODATA,
     chunk_size: int = CHUNK_SIZE,
+    to_bbox: bool = False,
 ) -> None:
     """Clip a GeoTIFF in-place to the model perimeter polygon.
 
@@ -42,6 +43,10 @@ def clip_mosaic(
         Nodata value to carry through to the output (default -9999).
     chunk_size : int, optional
         Controls GDAL's internal warp tile size in cells (default 256).
+    to_bbox : bool, optional
+        If True, clip to the perimeter's bounding box (rectilinear, full coverage,
+        no interior nodata) instead of the polygon cutline. Used so the 2D-hydraulic
+        coupling (mod21/TRITON) gets a gap-free DEM. Default False (polygon clip).
     """
     # Read source CRS so the cutline geometry is always co-registered
     src_ds = gdal.Open(mosaic_file, gdal.GA_ReadOnly)
@@ -52,25 +57,35 @@ def clip_mosaic(
 
     perimeter_reprojected = perimeter.to_crs(crs_wkt)
 
-    tmp_geojson = tempfile.NamedTemporaryFile(suffix=".geojson", delete=False)
-    tmp_geojson.close()
-    perimeter_reprojected.to_file(tmp_geojson.name, driver="GeoJSON")
-
     # float32 pixel × chunk grid × 8× headroom keeps the warper in a similar
     # memory envelope to the overflow tiled operations elsewhere in the pipeline
     warp_memory_bytes = chunk_size * chunk_size * 4 * 8
 
     tmp_output = mosaic_file + ".tmp.tif"
+    tmp_geojson = None
     try:
-        warp_options = gdal.WarpOptions(
-            cutlineDSName=tmp_geojson.name,
-            cropToCutline=True,
-            dstNodata=nodata,
-            srcNodata=nodata,
-            warpMemoryLimit=warp_memory_bytes,
-            warpOptions=["CUTLINE_ALL_TOUCHED=TRUE"],
-            creationOptions=COG_CREATION_OPTIONS,
-        )
+        if to_bbox:
+            minx, miny, maxx, maxy = perimeter_reprojected.total_bounds
+            warp_options = gdal.WarpOptions(
+                outputBounds=(minx, miny, maxx, maxy),
+                dstNodata=nodata,
+                srcNodata=nodata,
+                warpMemoryLimit=warp_memory_bytes,
+                creationOptions=COG_CREATION_OPTIONS,
+            )
+        else:
+            tmp_geojson = tempfile.NamedTemporaryFile(suffix=".geojson", delete=False)
+            tmp_geojson.close()
+            perimeter_reprojected.to_file(tmp_geojson.name, driver="GeoJSON")
+            warp_options = gdal.WarpOptions(
+                cutlineDSName=tmp_geojson.name,
+                cropToCutline=True,
+                dstNodata=nodata,
+                srcNodata=nodata,
+                warpMemoryLimit=warp_memory_bytes,
+                warpOptions=["CUTLINE_ALL_TOUCHED=TRUE"],
+                creationOptions=COG_CREATION_OPTIONS,
+            )
         ds = gdal.Warp(tmp_output, mosaic_file, options=warp_options)
         if ds is None:
             raise RuntimeError("gdal.Warp returned None — clip failed.")
@@ -85,7 +100,7 @@ def clip_mosaic(
             os.remove(tmp_output)
         raise
     finally:
-        if os.path.exists(tmp_geojson.name):
+        if tmp_geojson is not None and os.path.exists(tmp_geojson.name):
             os.remove(tmp_geojson.name)
 
 if __name__ == "__main__":

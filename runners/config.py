@@ -32,9 +32,9 @@ TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_co
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
 TRITON_MAPPING_INTERVAL_S = 1800         # TRITON spatial output interval [s]
 TRITON_HYDROGRAPH_INTERVAL_S = 900     # TRITON hydrograph output interval [s]
-TRITON_COURANT         = 0.25          # CFL stability factor (0.5 = 50% of the max stable timestep)
-TRITON_DECOMP_TYPE     = "static"     # domain decomposition: "static" (single partition) or "dynamic" (multi-partition, MPI+CUDA)
-TRITON_DECOMP_FACTOR   = 4           # dynamic domain-decomposition re-partition interval; 1 (every step) trips a CUDA illegal-address bug, >=10 is stable
+TRITON_COURANT         = 0.5          # CFL stability factor (0.5 = 50% of the max stable timestep)
+TRITON_DECOMP_TYPE     = "dynamic"     # domain decomposition: "static" (single partition) or "dynamic" (multi-partition, MPI+CUDA)
+TRITON_DECOMP_FACTOR   = 5           # dynamic domain-decomposition re-partition interval; 1 (every step) trips a CUDA illegal-address bug, >=10 is stable
 TRITON_CONST_MANN      = 0.060        # fallback constant Manning roughness used where land cover is unavailable
 TRITON_CHANNEL_MANN    = 0.038         # roughness burned into .mann for channel cells (facc >= TRITON_BF_CHANNEL_KM2); None disables
 TRITON_IO_LULC_PATH    = f"{TRITON_OUT_DIR}/io_lulc.tif"  # cached ESRI/IO 10 m land-cover raster (auto-acquired by mod22 when missing)
@@ -54,7 +54,7 @@ IO_MANNING_N = {
 TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
 TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_AUTO_START      = True         # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
-TRITON_ONSET_MM_HR     = 0.5          # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
+TRITON_ONSET_MM_HR     = 0          # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
 TRITON_START_FILE      = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes
 TRITON_WARM_START      = False         # produce warm-start init files (inith/initqx/inityq) seeding channel depth/discharge from mHM pre-event baseflow; False = cold start (no init files, cfg omits them)
 TRITON_BF_CHANNEL_KM2  = 0.5          # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed

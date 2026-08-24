@@ -140,7 +140,9 @@ def main() -> int:
     zone_ids, valid, n_zones = gridmod.build_zones(runoff)
     ix1, iy1 = gridmod.dem_axis_to_l1(dem_grid, runoff)
     n_rows = runoff["time"].size
-    log.info("Runoff zones (num_runoffs): %d", n_zones)
+    # zone 0 is the reserved no-runoff zone for off-watershed cells; the N L1 zones are 1..N
+    num_runoffs = n_zones + 1
+    log.info("Runoff zones: %d L1 + 1 reserved zero-zone (num_runoffs=%d)", n_zones, num_runoffs)
 
     if not (skip("dem") and skip("rmap")):
         log.info("Writing DEM + runoff map ...")
@@ -286,7 +288,7 @@ def main() -> int:
         writers.write_cfg(cfg_path=paths["cfg"],
                           names=names,
                           projection=TRITON_PROJECTION,
-                          num_runoffs=n_zones,
+                          num_runoffs=num_runoffs,
                           runoff_rows=n_rows,
                           sim_duration_s=sim_duration_s,
                           mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
@@ -298,11 +300,11 @@ def main() -> int:
                           init_names=init_names,
                           )
 
-    # cross-file consistency checks
-    assert n_zones == int(zone_ids.max()), "zone id range does not match num_runoffs"
+    # cross-file consistency checks: max rmap id (N) must stay < num_runoffs (N+1)
+    assert int(zone_ids.max()) == num_runoffs - 1, "max rmap zone id must be num_runoffs-1"
     log.info("Done. TRITON inputs written to %s", out)
     log.info("  num_runoffs=%d runoff_row_size=%d obs=%d sim_duration=%ds",
-             n_zones, n_rows, n_obs, sim_duration_s)
+             num_runoffs, n_rows, n_obs, sim_duration_s)
     return 0
 
 

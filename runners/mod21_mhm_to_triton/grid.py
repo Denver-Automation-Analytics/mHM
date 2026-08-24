@@ -41,28 +41,25 @@ def _dissolved_polygon(domain_file: Path, dst_crs: str) -> gpd.GeoDataFrame:
 
 def warp_dem(src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float,
              out_tif: Path) -> Dict:
-    """Reproject, clip to the domain, and resample the DEM to *cellsize* metres.
+    """Reproject and resample the DEM to *cellsize* metres over the domain bbox.
 
-    Returns the output grid geometry (origin of the upper-left corner, cellsize,
-    ncols, nrows). Pixels are aligned to the cellsize grid so the output nests
-    cleanly regardless of the source extent.
+    Fills the whole domain bounding box (no cutline) so the TRITON DEM is
+    rectilinear/gap-free — the source dem_corrected already covers this bbox with
+    real terrain. Returns the output grid geometry (origin of the upper-left
+    corner, cellsize, ncols, nrows). Pixels are aligned to the cellsize grid so
+    the output nests cleanly regardless of the source extent.
     """
     dom = _dissolved_polygon(domain_file, dst_crs)
-    with tempfile.NamedTemporaryFile(suffix=".gpkg", delete=False) as tmp:
-        cutline = tmp.name
-    dom.to_file(cutline, driver="GPKG")
-    try:
-        gdal.Warp(
-            str(out_tif), str(src_tif),
-            dstSRS=dst_crs, xRes=cellsize, yRes=cellsize,
-            cutlineDSName=cutline, cropToCutline=True,
-            dstNodata=NODATA, resampleAlg="average",
-            targetAlignedPixels=True, multithread=True,
-            outputType=gdal.GDT_Float32,
-            creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
-        )
-    finally:
-        os.unlink(cutline)
+    minx, miny, maxx, maxy = (float(v) for v in dom.total_bounds)
+    gdal.Warp(
+        str(out_tif), str(src_tif),
+        dstSRS=dst_crs, xRes=cellsize, yRes=cellsize,
+        outputBounds=(minx, miny, maxx, maxy),
+        dstNodata=NODATA, resampleAlg="average",
+        targetAlignedPixels=True, multithread=True,
+        outputType=gdal.GDT_Float32,
+        creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
+    )
 
     ds = gdal.Open(str(out_tif))
     gt = ds.GetGeoTransform()

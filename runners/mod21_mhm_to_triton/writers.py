@@ -69,8 +69,10 @@ def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
 def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) -> int:
     """Write the gridded runoff time series [mm/hr]; returns the number of rows.
 
-    Column order matches the zone ids written to .rmap (row-major over valid L1
-    cells). mHM runoff (mm per output step) is converted to a mm/hr rate.
+    A leading all-zero column is zone 0, the reserved "no runoff" zone that every
+    off-watershed cell (.rmap==0) draws from; the N valid L1 cells follow as zones
+    1..N, so .rmap ids 1..N index their own column and num_runoffs is N+1. mHM
+    runoff (mm per output step) is converted to a mm/hr rate.
     """
     da = runoff["da"]
     nt = da.sizes["time"]
@@ -84,7 +86,7 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
             for k in range(block.shape[0]):
                 t = (start + k) * step_h
                 vals = ",".join(np.char.mod("%.6g", block[k]).tolist())
-                f.write(f"{t},{vals}\n")
+                f.write(f"{t},0,{vals}\n")
     return nt
 
 

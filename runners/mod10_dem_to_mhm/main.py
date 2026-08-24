@@ -21,7 +21,7 @@ from osgeo import gdal
 from pyproj import CRS as ProjCRS
 import rasterio
 from rasterio import features
-from shapely.geometry import shape, Point
+from shapely.geometry import shape, Point, box
 from shapely.ops import unary_union
 
 from clip import clip_mosaic
@@ -41,6 +41,21 @@ def load_domain(buffer_m=None, crs=None):
     if buffer_m:
         projected["geometry"] = projected.geometry.buffer(buffer_m)
     return projected.to_crs(crs if crs is not None else src_crs)
+
+def acquisition_perimeter(margin_m: float = None) -> gpd.GeoDataFrame:
+    """Rectangle over the domain's OUTPUT_CRS bounding box (+margin), in OUTPUT_CRS.
+
+    DEM tiles/clip use this so that after reprojection to OUTPUT_CRS the raster fully
+    covers the projected (axis-aligned) grid: a source-CRS rectangle reprojects to a
+    rotated quad and would leave nodata in the projected bbox corners, so acquisition
+    must be sized in the target CRS, not the geographic source CRS.
+    """
+    if margin_m is None:
+        margin_m = 2 * DOMAIN_BUFFER_M
+    dom = load_domain().to_crs(OUTPUT_CRS)
+    minx, miny, maxx, maxy = dom.total_bounds
+    rect = box(minx - margin_m, miny - margin_m, maxx + margin_m, maxy + margin_m)
+    return gpd.GeoDataFrame({"id": [1]}, geometry=[rect], crs=OUTPUT_CRS)
 
 def get_dem_tiles(model_perimeter: gpd.GeoDataFrame,
             res: int = 10,
@@ -325,20 +340,23 @@ def main():
     mosaic_file = os.path.join(DEM_DIR, "mosaic.tif")
     mosaic_clip_file = os.path.join(DEM_DIR, "mosaic_clipped.tif")
     model_perimeter = load_domain()  # domain polygon grown by DOMAIN_BUFFER_M
+    # DEM acquisition/clip is sized in OUTPUT_CRS so the reprojected raster fills the
+    # projected grid corners (a geographic rectangle rotates and leaves nodata otherwise)
+    acquire_perimeter = acquisition_perimeter()
 
     if not os.path.exists(mosaic_clip_file):
         if os.path.exists(mosaic_file):
             print(f"Reusing cached mosaic: {mosaic_file}")
         else:
-            tiles = get_dem_tiles(model_perimeter, res=DEM_CELL_SIZE_M, save_dir=TILES_DIR)
+            tiles = get_dem_tiles(acquire_perimeter, res=DEM_CELL_SIZE_M, save_dir=TILES_DIR)
             if len(tiles) == 0:
                 print("Failed: No DEM tiles were downloaded.")
                 sys.exit(1)
             print("Mosaicing DEM tiles")
             mosaic_tiles(tiles, mosaic_file)
 
-        print("Clipping mosaic to model perimeter")
-        clip_mosaic(mosaic_file, model_perimeter, mosaic_clip_file)
+        print("Clipping mosaic to OUTPUT_CRS bounding box (rectilinear, gap-free after reprojection)")
+        clip_mosaic(mosaic_file, acquire_perimeter, mosaic_clip_file, to_bbox=True)
     gc.collect()
 
     # 2. Terrain Conditioning (Breach + Fill)
@@ -427,11 +445,11 @@ def main():
     # 5. Write mHM-ready NetCDF files from L0-resampled TIFs
     print("Writing mHM-ready NetCDF files...")
     os.makedirs(MORPH_DIR, exist_ok=True)
-    write_nc(f"{l0_dir}/dem_l0.tif",    f"{MORPH_DIR}/dem.nc",    dtype="float32", var_name="dem",    block_size=CHUNK_SIZE)
-    write_nc(f"{l0_dir}/slope_l0.tif",  f"{MORPH_DIR}/slope.nc",  dtype="float32", var_name="slope",  block_size=CHUNK_SIZE)
-    write_nc(f"{l0_dir}/aspect_l0.tif", f"{MORPH_DIR}/aspect.nc", dtype="float32", var_name="aspect", block_size=CHUNK_SIZE)
-    write_nc(f"{l0_dir}/fdir_l0.tif",   f"{MORPH_DIR}/fdir.nc",   dtype="int32",   var_name="fdir",   block_size=CHUNK_SIZE)
-    write_nc(f"{l0_dir}/facc_l0.tif",   f"{MORPH_DIR}/facc.nc",   dtype="int32",   var_name="facc",   block_size=CHUNK_SIZE)
+    write_nc(f"{l0_dir}/dem_l0.tif",    f"{MORPH_DIR}/dem.nc",    dtype="float32", var_name="dem",    block_size=WRITE_CHUNK_SIZE)
+    write_nc(f"{l0_dir}/slope_l0.tif",  f"{MORPH_DIR}/slope.nc",  dtype="float32", var_name="slope",  block_size=WRITE_CHUNK_SIZE)
+    write_nc(f"{l0_dir}/aspect_l0.tif", f"{MORPH_DIR}/aspect.nc", dtype="float32", var_name="aspect", block_size=WRITE_CHUNK_SIZE)
+    write_nc(f"{l0_dir}/fdir_l0.tif",   f"{MORPH_DIR}/fdir.nc",   dtype="int32",   var_name="fdir",   block_size=WRITE_CHUNK_SIZE)
+    write_nc(f"{l0_dir}/facc_l0.tif",   f"{MORPH_DIR}/facc.nc",   dtype="int32",   var_name="facc",   block_size=WRITE_CHUNK_SIZE)
     _remap_fdir_to_arcgis(f"{MORPH_DIR}/fdir.nc")
 
     # 6. Delineate the true basin (overflow) and mask morphology so dem/fdir masks
@@ -448,6 +466,7 @@ if __name__ == "__main__":
     DEM_CELL_SIZE_M   = 10        # native resolution of the source DEM (m)
     RADIUS_CELLS       = 50        # radius for breaching (cells)
     CHUNK_SIZE         = 256       # chunk size for tiled processing (cells)
+    WRITE_CHUNK_SIZE   = 32      # chunk size for writing NetCDF (cells)
     DEM_DIR  = os.path.join(WORKING_DIR, "mhm_input/dem")  # directory for DEM processing
     TILES_DIR = os.path.join(WORKING_DIR, "mhm_input/dem/tiles")
     MORPH_DIR = os.path.join(WORKING_DIR, "mhm_input/morph")
