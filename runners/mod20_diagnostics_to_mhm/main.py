@@ -268,7 +268,7 @@ def main() -> None:
     args = ap.parse_args()
 
     work = Path(WORKING_DIR)
-    out_dir = work / "output"
+    out_dir = work / "mhm_output"
     flux_nc = out_dir / FLUX_FILE
 
     if args.skip_run:

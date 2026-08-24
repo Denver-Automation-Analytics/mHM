@@ -3,7 +3,7 @@ USGS karst geology -> mHM geology inputs.
 
 Acquires USGS "Karst in the United States" vector classes (karst_access.py),
 rasterises them onto the L0 grid defined by mod10's dem.nc, and writes the two
-files mHM reads from input/morph/:
+files mHM reads from mhm_input/morph/:
 
   geology_class.asc            gridded integer ClassUnit ids (L0, EPSG:5070)
   geology_classdefinition.txt  LUT with a Karstic flag per unit
@@ -65,13 +65,13 @@ def main() -> None:
     setup_logging()
     log = logging.getLogger("geology_to_mhm")
 
-    morph_dir = Path(WORKING_DIR) / "input" / "morph"
+    morph_dir = Path(WORKING_DIR) / "mhm_input" / "morph"
     grid_def = load_dem_grid(morph_dir / "dem.nc", nodata=NODATA)
     log.info("L0 grid: %d x %d at %d m", grid_def["ncols"], grid_def["nrows"],
              int(grid_def["cellsize"]))
 
     cache_path = morph_dir / "raw" / "karst.gpkg"
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "input/domain/watershed.geojson")
+    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson")
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."

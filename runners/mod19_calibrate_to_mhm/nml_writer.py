@@ -123,7 +123,7 @@ def write_mhm_nml(
   dir_LCover(1)        = "{d}/mhm_input/luse/"
   mhm_file_RestartOut(1) = "{d}/restart/mHM_restart_001.nc"
   mrm_file_RestartOut(1) = "{d}/restart/mRM_restart_001.nc"
-  dir_Out(1)           = "{d}/output/"
+  dir_Out(1)           = "{d}/mhm_output/"
   file_LatLon(1)       = "{d}/mhm_input/latlon/latlon.nc"
 /
 
@@ -144,7 +144,7 @@ def write_mhm_nml(
 
 &directories_mRM
   dir_Gauges(1)        = "{d}/mhm_input/gauge/"
-  dir_Total_Runoff(1)  = "{d}/output/"
+  dir_Total_Runoff(1)  = "{d}/mhm_output/"
   dir_Bankfull_Runoff(1) = "{d}/mhm_input/optional_data/"
 /
 
