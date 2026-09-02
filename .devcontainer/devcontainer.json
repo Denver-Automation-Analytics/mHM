@@ -25,9 +25,14 @@
       }
     }
   },
+  "mounts": [
+    "source=${localEnv:USERPROFILE}/.claude,target=/root/.claude,type=bind,consistency=cached",
+    "source=${localEnv:USERPROFILE}/.claude.json,target=/root/.claude.json,type=bind,consistency=cached"
+  ],
   "remoteEnv": {
     "PATH": "/opt/conda/envs/mhm-dev/bin:${containerEnv:PATH}",
-    "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev"
+    "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev",
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
   },
   "postCreateCommand": "echo 'mHM dev container ready. Conda env: .devcontainer/env.yaml. Build with: cmake -S . -B build -G Ninja -DCMAKE_WITH_OpenMP=ON && cmake --build build'"
 }

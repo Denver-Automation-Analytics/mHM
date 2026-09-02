@@ -1,16 +1,15 @@
 """Shared configuration for all runner modules."""
 from datetime import date, timedelta
 
-# --- mHM/mRM model configuration ---
-WORKING_DIR = "/workspace/data/eastfork_whitewater"  # working directory for all modules
-DOMAIN_FILE = "/workspace/data/eastfork_whitewater/mhm_input/domain/data.geojson"  # watershed boundary for all modules
+WORKING_DIR = "/workspace/data/frio_river"  # working directory for all modules
+DOMAIN_FILE = "/workspace/data/frio_river/mhm_input/domain/data.geojson"  # watershed boundary for all modules
 DOMAIN_BUFFER_M = 1000     # buffer [m] grown around the domain polygon when clipping/gridding inputs
 L0_CELL_SIZE_M = 250       # Landscape detail grid resolution (mod10, mod13, mod14, mod15, mod16)
 L1_CELL_SIZE_M = 1000      # Hydrologic simulation grid resolution (i.e., mHM output resolution)
 L2_CELL_SIZE_M = 3000      # Meteorological grid resolution (mod11, mod12)
 OUTPUT_CRS     = "EPSG:5070"  # common projected CRS for all spatial outputs
-END_DATE        = "2026-08-14"  # forcing/simulation and evaluation end.
-EVAL_START_DATE = "2026-07-28"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
+END_DATE        = "2026-07-31"  # forcing/simulation and evaluation end.
+EVAL_START_DATE = "2026-07-10"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
 WARMUP_DAYS     = 350  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE). Does NOT shift the eval window.
 # forcing/simulation start (earliest date mHM may draw spin-up from), derived as exactly WARMUP_DAYS before EVAL_START_DATE.
 START_DATE      = (date.fromisoformat(EVAL_START_DATE) - timedelta(days=WARMUP_DAYS)).isoformat()
@@ -21,13 +20,13 @@ N_ITERATIONS   = 1000     # mod19 DDS optimizer trials; more = better calibratio
 SEED           = 32      # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS  = 25     # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
 PET_METHOD     = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
-WANTED_GAUGE_IDS = ["03275600",]
+WANTED_GAUGE_IDS = ["08206600",]
 NODATA = -9999
 RESUME = False  # mod19: if True, reseed DDS start values from the previous run's FinalParam.nml
 
 # --- TRITON model configuration ---
-TRITON_OUT_DIR         = "/workspace/data/eastfork_whitewater/triton_input"  # directory that receives the generated TRITON input files (matches the input/<domain>/ paths in the .cfg)
-TRITON_DOMAIN_NAME     = "eastfork_whitewater"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
+TRITON_OUT_DIR         = "/workspace/data/frio_river/triton_input"  # directory that receives the generated TRITON input files (matches the input/<domain>/ paths in the .cfg)
+TRITON_DOMAIN_NAME     = "frio_river"     # basename for the TRITON files (<name>.dem, <name>.roff, ...)
 TRITON_DEM_CELLSIZE_M  = 10           # TRITON grid resolution [m]; mod10 dem_corrected.tif is reprojected/resampled to this
 TRITON_PROJECTION      = OUTPUT_CRS   # projected CRS written to the TRITON .cfg (must match the runoff grid)
 TRITON_MAPPING_INTERVAL_S = 1800         # TRITON spatial output interval [s]
@@ -51,8 +50,8 @@ IO_MANNING_N = {
     9:  0.030,  # Snow/Ice
     11: 0.040,  # Rangeland
 }
-TRITON_START_DATE      = "2026-08-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
-TRITON_END_DATE        = "2026-08-15"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
+TRITON_START_DATE      = "2026-07-10"         # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
+TRITON_END_DATE        = "2026-07-25"         # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_AUTO_START      = True         # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
 TRITON_ONSET_MM_HR     = 0          # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
 TRITON_START_FILE      = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes
@@ -96,3 +95,21 @@ TRITON_PERF_SUMMARY    = f"{WORKING_DIR}/triton_output/performance.txt"       # 
 TRITON_PERF_DIR        = f"{WORKING_DIR}/triton_output/performance"          # per-print-step cumulative timing files (performanceN.txt)
 TRITON_PERF_WET_VAR    = "H"          # variable used for the wet-cell/volume overlay (must have a cached <var>.nc)
 TRITON_PERF_ROFF       = f"{TRITON_OUT_DIR}/{TRITON_DOMAIN_NAME}.roff"       # gridded runoff time series driving TRITON (mod21 output)
+
+# --- TRITON stage-vs-gauge comparison (mod22 --compare) ---
+TRITON_COMPARE_OUT_DIR = f"{WORKING_DIR}/triton_output/compare"  # directory that receives the compare_<gauge>.png hydrograph overlays
+TRITON_COMPARE_TZ      = "America/Chicago"  # IANA tz the TRITON start date (mHM forcing) is expressed in; naive H.nc times are localized to it before converting to UTC for alignment with UTC gauge data
+# Comparison points sampled from H.nc at an explicit lat/lon (WGS84) rather than the gauge's own (imprecise) coordinate.
+# Observed USGS gauge height (00065, ft) is converted to water depth at the point via:
+#   depth[m] = (gauge_altitude_ft + gauge_stage_ft) * 0.3048 - bed_elevation[m]
+# where bed_elevation is sampled from TRITON_MAP_DEM_TIF; altitude_accuracy_ft sets the shaded uncertainty band.
+TRITON_COMPARE_POINTS = (
+    {
+        "name": "Frio River at Tilden",              # label used in the output filename/plot title
+        "lat": 28.4674927922804,                 # sampling latitude  [deg, WGS84]
+        "lon": -98.5475173731209,                # sampling longitude [deg, WGS84]
+        "gauge_id": "08206600",        # USGS site whose stage (00065) is compared
+        "gauge_altitude_ft": 212.66,   # altitude of the gauge zero datum [ft]; set to the site's true datum (near the DEM bed at the point)
+        "altitude_accuracy_ft": 0.23,   # datum/DEM vertical uncertainty [ft] -> +/- band on the converted depth
+    },
+)

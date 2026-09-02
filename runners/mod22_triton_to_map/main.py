@@ -34,14 +34,16 @@ from typing import Callable, Dict, List
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (L1_CELL_SIZE_M, NODATA, TRITON_GIF_CMAP, TRITON_GIF_FPS,
-                    TRITON_GIF_MAX_FRAMES, TRITON_GIF_VARS,
+from config import (END_DATE, L1_CELL_SIZE_M, NODATA, TRITON_COMPARE_OUT_DIR,
+                    TRITON_COMPARE_POINTS, TRITON_COMPARE_TZ, TRITON_GIF_CMAP,
+                    TRITON_GIF_FPS, TRITON_GIF_MAX_FRAMES, TRITON_GIF_VARS,
                     TRITON_MAP_CFG, TRITON_MAP_CLIP, TRITON_MAP_DEM_TIF,
                     TRITON_MAP_GTIFF_DIR, TRITON_MAP_HMIN, TRITON_MAP_MIN_DEPTH,
                     TRITON_MAP_OUT_DIR, TRITON_MAP_SERIES_DIR, TRITON_PERF_DIR,
                     TRITON_PERF_ROFF, TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR,
                     TRITON_START_DATE, TRITON_START_FILE)
 
+import compare
 import gifs
 import perf
 import perf_plots
@@ -76,6 +78,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--perf-dir", default=TRITON_PERF_DIR, help="directory of TRITON performanceN.txt per-step timing files")
     p.add_argument("--roff", default=TRITON_PERF_ROFF, help="TRITON .roff gridded runoff input (domain applied-runoff overlay)")
     p.add_argument("--series-dir", default=TRITON_MAP_SERIES_DIR, help="directory of TRITON stage time-series files (<name>_at_Xsec.txt)")
+    p.add_argument("--compare", action="store_true", help="overlay TRITON depth at TRITON_COMPARE_POINTS lat/lon against the observed USGS gauge stage")
+    p.add_argument("--compare-out", default=TRITON_COMPARE_OUT_DIR, help="output directory for the compare_<gauge>.png hydrograph overlays")
     return p.parse_args()
 
 
@@ -125,9 +129,29 @@ def main() -> int:
     args = parse_args()
     gtiff = Path(args.gtiff_dir)
     out = Path(args.out_dir)
+
+    if args.compare:
+        h_nc = out / "H.nc"
+        if not h_nc.exists():
+            log.error("%s not found; run the default mod22 consolidation first.", h_nc)
+            return 1
+        dem = Path(args.dem)
+        if not dem.exists():
+            log.error("DEM not found: %s (needed for bed elevation).", dem)
+            return 1
+        start_date = args.start_date
+        start_file = Path(args.start_file) if args.start_file else None
+        if start_file and start_file.exists():
+            start_date = start_file.read_text().strip()
+        written = compare.run(TRITON_COMPARE_POINTS, h_nc, dem, TRITON_COMPARE_TZ,
+                              start_date, END_DATE, NODATA, Path(args.compare_out))
+        log.info("Compare: wrote %d plot(s) to %s", len(written), args.compare_out)
+        return 0
+
     if not gtiff.is_dir():
         log.error("gtiff directory not found: %s", gtiff)
         return 1
+
     out.mkdir(parents=True, exist_ok=True)
 
     avail = readers.available_vars(gtiff)
