@@ -48,24 +48,35 @@ def discharge_stats(disch: Dict) -> List[Dict]:
     for g in disch["gauges"]:
         sim, obs = _paired(g["qsim"], g["qobs"])
         if sim.size == 0:
-            rows.append({"site_no": g["site_no"], "name": g["name"],
-                         "n_obs": 0, "note": "no overlapping observations"})
+            rows.append(
+                {
+                    "site_no": g["site_no"],
+                    "name": g["name"],
+                    "n_obs": 0,
+                    "note": "no overlapping observations",
+                }
+            )
             continue
         kge, r, alpha, beta = _kge(sim, obs)
         pbias = float(100.0 * (sim - obs).sum() / obs.sum()) if obs.sum() != 0 else None
         rmse = float(np.sqrt(((sim - obs) ** 2).mean()))
-        rows.append({
-            "site_no": g["site_no"],
-            "name": g["name"],
-            "n_obs": int(sim.size),
-            "kge": kge, "kge_r": r, "kge_alpha": alpha, "kge_beta": beta,
-            "nse": _nse(sim, obs),
-            "lognse": _lognse(sim, obs),
-            "pbias_pct": pbias,
-            "rmse_m3s": rmse,
-            "mean_sim_m3s": float(sim.mean()),
-            "mean_obs_m3s": float(obs.mean()),
-        })
+        rows.append(
+            {
+                "site_no": g["site_no"],
+                "name": g["name"],
+                "n_obs": int(sim.size),
+                "kge": kge,
+                "kge_r": r,
+                "kge_alpha": alpha,
+                "kge_beta": beta,
+                "nse": _nse(sim, obs),
+                "lognse": _lognse(sim, obs),
+                "pbias_pct": pbias,
+                "rmse_m3s": rmse,
+                "mean_sim_m3s": float(sim.mean()),
+                "mean_obs_m3s": float(obs.mean()),
+            }
+        )
     return rows
 
 
@@ -75,9 +86,12 @@ def _field_summary(field: np.ndarray) -> Dict:
         return {"n_cells": 0}
     return {
         "n_cells": int(v.size),
-        "min": float(v.min()), "max": float(v.max()),
-        "mean": float(v.mean()), "std": float(v.std()),
-        "p05": float(np.percentile(v, 5)), "p50": float(np.percentile(v, 50)),
+        "min": float(v.min()),
+        "max": float(v.max()),
+        "mean": float(v.mean()),
+        "std": float(v.std()),
+        "p05": float(np.percentile(v, 5)),
+        "p50": float(np.percentile(v, 50)),
         "p95": float(np.percentile(v, 95)),
     }
 
@@ -103,7 +117,7 @@ def precip_stats(inp: Dict, window) -> Dict:
     years = max((time[-1] - time[0]).days / 365.25, 1e-9)
     daily = pd.Series(inp["series"]["pre"], index=time)
 
-    cell_total = inp["fields"]["pre"]          # per-cell sum over window [mm]
+    cell_total = inp["fields"]["pre"]  # per-cell sum over window [mm]
     cell_annual = cell_total / years
     spatial = _field_summary(cell_annual)
 
@@ -131,4 +145,3 @@ def parameter_stats(params: List[Dict]) -> Dict:
         "railed": railed,
         "parameters": params,
     }
-

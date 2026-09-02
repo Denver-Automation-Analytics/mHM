@@ -15,8 +15,16 @@ from metrics import Metric
 from readers import monthly_sum, RAIL_TOL
 
 
-def _imshow(ax, field: np.ndarray, x: np.ndarray, y: np.ndarray, title: str, cmap: str,
-            vmin=None, vmax=None):
+def _imshow(
+    ax,
+    field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    title: str,
+    cmap: str,
+    vmin=None,
+    vmax=None,
+):
     extent = [x.min(), x.max(), y.min(), y.max()]
     # Match row order to the y-axis direction so maps are not vertically flipped.
     origin = "lower" if y[0] < y[-1] else "upper"
@@ -28,8 +36,15 @@ def _imshow(ax, field: np.ndarray, x: np.ndarray, y: np.ndarray, title: str, cma
             lo, hi = np.nanpercentile(finite, [2, 98])
             vmin = lo if vmin is None else vmin
             vmax = (hi if hi > lo else lo + 1e-9) if vmax is None else vmax
-    im = ax.imshow(field, extent=extent, origin=origin, cmap=cmap, aspect="equal",
-                   vmin=vmin, vmax=vmax)
+    im = ax.imshow(
+        field,
+        extent=extent,
+        origin=origin,
+        cmap=cmap,
+        aspect="equal",
+        vmin=vmin,
+        vmax=vmax,
+    )
     ax.set_title(title, fontsize=9)
     ax.tick_params(labelsize=7)
     plt.colorbar(im, ax=ax, shrink=0.8)
@@ -47,7 +62,9 @@ def plot_budyko(flux: Dict, inp: Dict, out_png: Path) -> None:
     xs = np.linspace(0, max(3.0, ai * 1.2 if np.isfinite(ai) else 3.0), 200)
     ax.plot(xs, np.minimum(xs, 1.0), "k--", lw=1, label="energy / water limits")
     ax.axhline(1.0, color="k", ls=":", lw=0.8)
-    budyko = np.sqrt(xs * np.tanh(1.0 / np.where(xs == 0, np.nan, xs)) * (1 - np.exp(-xs)))
+    budyko = np.sqrt(
+        xs * np.tanh(1.0 / np.where(xs == 0, np.nan, xs)) * (1 - np.exp(-xs))
+    )
     ax.plot(xs, budyko, "b-", lw=1, label="Budyko curve")
     ax.plot(ai, ei, "ro", ms=9, label=f"basin ({ai:.2f}, {ei:.2f})")
     ax.set_xlabel("Aridity index  PET / P")
@@ -98,10 +115,26 @@ def plot_maps(flux: Dict, out_png: Path) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 9))
     _imshow(axes[0, 0], aet, x, y, "Actual ET total [mm]", "YlGnBu")
     _imshow(axes[0, 1], rech, x, y, "Recharge (L1_percol) total [mm]", "PuBuGn")
-    _imshow(axes[1, 0], rc, x, y, "Runoff coeff  Q/preEffect [-]", "viridis",
-            vmin=0.0, vmax=1.0)
-    _imshow(axes[1, 1], bfi, x, y, "Baseflow fraction  QB/Q [-]", "magma",
-            vmin=0.0, vmax=1.0)
+    _imshow(
+        axes[1, 0],
+        rc,
+        x,
+        y,
+        "Runoff coeff  Q/preEffect [-]",
+        "viridis",
+        vmin=0.0,
+        vmax=1.0,
+    )
+    _imshow(
+        axes[1, 1],
+        bfi,
+        x,
+        y,
+        "Baseflow fraction  QB/Q [-]",
+        "magma",
+        vmin=0.0,
+        vmax=1.0,
+    )
     fig.suptitle("Per-cell diagnostic maps (evaluation window)", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out_png, dpi=120)
@@ -152,7 +185,9 @@ def plot_hydrographs(disch: Dict, dstats: List[Dict], inp: Dict, out_png: Path) 
         # Precip volume as bars hanging from the top on an inverted twin axis.
         axp = ax.twinx()
         axp.bar(p_t, p_v, width=1.0, color="#6baed6", alpha=0.6, linewidth=0, zorder=1)
-        axp.set_ylim(p_max * 2.6, 0.0)   # invert: 0 at top so bars occupy the upper third
+        axp.set_ylim(
+            p_max * 2.6, 0.0
+        )  # invert: 0 at top so bars occupy the upper third
         axp.set_ylabel("domain precip [Mm³/day]", fontsize=8, color="#3d6d99")
         axp.tick_params(labelsize=7, colors="#3d6d99")
         # Draw discharge lines above the bars (transparent primary axis on top).
@@ -160,7 +195,15 @@ def plot_hydrographs(disch: Dict, dstats: List[Dict], inp: Dict, out_png: Path) 
         ax.patch.set_visible(False)
         t = g["time"]
         ax.plot(t, g["qobs"], color="k", lw=1.0, label="observed", zorder=3)
-        ax.plot(t, g["qsim"], color="#c44e52", lw=1.0, alpha=0.9, label="simulated", zorder=3)
+        ax.plot(
+            t,
+            g["qsim"],
+            color="#c44e52",
+            lw=1.0,
+            alpha=0.9,
+            label="simulated",
+            zorder=3,
+        )
         st = stat_by_site.get(g["site_no"], {})
         skill = ""
         if st.get("kge") is not None:
@@ -216,15 +259,26 @@ def plot_terrain(terr: Dict, tstats: Dict, out_png: Path) -> None:
     if "slope" in fields:
         _imshow(axes[0, 1], fields["slope"], x, y, "Slope [deg]", "YlOrBr")
     if "aspect" in fields:
-        _imshow(axes[1, 0], fields["aspect"], x, y, "Aspect [deg]", "twilight",
-                vmin=0.0, vmax=360.0)
+        _imshow(
+            axes[1, 0],
+            fields["aspect"],
+            x,
+            y,
+            "Aspect [deg]",
+            "twilight",
+            vmin=0.0,
+            vmax=360.0,
+        )
     ax = axes[1, 1]
     if "dem" in fields:
         v = fields["dem"][np.isfinite(fields["dem"])]
         ax.hist(v, bins=40, color="#8c7b6b")
         s = tstats.get("dem", {})
-        ax.set_title(f"Elevation dist.  mean={s.get('mean', float('nan')):.0f} m  "
-                     f"range={s.get('range_m', float('nan')):.0f} m", fontsize=9)
+        ax.set_title(
+            f"Elevation dist.  mean={s.get('mean', float('nan')):.0f} m  "
+            f"range={s.get('range_m', float('nan')):.0f} m",
+            fontsize=9,
+        )
         ax.set_xlabel("elevation [m]", fontsize=8)
         ax.set_ylabel("cells", fontsize=8)
         ax.tick_params(labelsize=7)
@@ -238,14 +292,19 @@ def plot_precip_maps(inp: Dict, pstats: Dict, out_png: Path) -> None:
     """Mean-annual precipitation map and the per-cell annual-total distribution."""
     x, y = inp["x"], inp["y"]
     years = max(pstats.get("years", 1.0), 1e-9)
-    cell_annual = inp["fields"]["pre"] / years          # mm/yr per cell
+    cell_annual = inp["fields"]["pre"] / years  # mm/yr per cell
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     _imshow(axes[0], cell_annual, x, y, "Mean annual precipitation [mm/yr]", "YlGnBu")
     v = cell_annual[np.isfinite(cell_annual)]
     axes[1].hist(v, bins=40, color="#4c72b0")
-    axes[1].axvline(pstats.get("annual_domain_mm", np.nan), color="k", ls="--", lw=1,
-                    label=f"domain mean {pstats.get('annual_domain_mm', float('nan')):.0f} mm/yr")
+    axes[1].axvline(
+        pstats.get("annual_domain_mm", np.nan),
+        color="k",
+        ls="--",
+        lw=1,
+        label=f"domain mean {pstats.get('annual_domain_mm', float('nan')):.0f} mm/yr",
+    )
     axes[1].set_title("Per-cell annual precipitation", fontsize=9)
     axes[1].set_xlabel("mm/yr", fontsize=8)
     axes[1].set_ylabel("cells", fontsize=8)
@@ -264,7 +323,7 @@ def plot_parameters(params: List[Dict], out_png: Path) -> None:
     the shaded rail zones (red) indicate a bound was effectively reached.
     """
     n = len(params)
-    ys = np.arange(n)[::-1]                       # keep namelist order, top-down
+    ys = np.arange(n)[::-1]  # keep namelist order, top-down
     fig, ax = plt.subplots(figsize=(9, max(4.0, 0.26 * n)))
     ax.axvspan(0.0, RAIL_TOL, color="#f2b6b6", alpha=0.6, zorder=0)
     ax.axvspan(1.0 - RAIL_TOL, 1.0, color="#f2b6b6", alpha=0.6, zorder=0)
@@ -284,17 +343,28 @@ def plot_parameters(params: List[Dict], out_png: Path) -> None:
     ax.set_xticklabels(["lower\nbound", "mid", "upper\nbound"], fontsize=8)
     n_rail = sum(p["railed"] for p in params)
     n_free = sum(not p["fixed"] for p in params)
-    ax.set_title(f"DDS calibrated parameters vs. bounds — "
-                 f"{n_rail}/{n_free} rail-pinned (red), grey = fixed", fontsize=10)
+    ax.set_title(
+        f"DDS calibrated parameters vs. bounds — "
+        f"{n_rail}/{n_free} rail-pinned (red), grey = fixed",
+        fontsize=10,
+    )
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
     plt.close(fig)
 
 
-def write_all(flux: Dict, inp: Dict, metrics: List[Metric], out_dir: Path,
-              disch: Dict = None, dstats: List[Dict] = None,
-              terr: Dict = None, tstats: Dict = None, pstats: Dict = None,
-              params: List[Dict] = None) -> List[Path]:
+def write_all(
+    flux: Dict,
+    inp: Dict,
+    metrics: List[Metric],
+    out_dir: Path,
+    disch: Dict = None,
+    dstats: List[Dict] = None,
+    terr: Dict = None,
+    tstats: Dict = None,
+    pstats: Dict = None,
+    params: List[Dict] = None,
+) -> List[Path]:
     """Render every diagnostic plot into out_dir and return the file paths."""
     out_dir.mkdir(parents=True, exist_ok=True)
     renderers = [
@@ -304,12 +374,18 @@ def write_all(flux: Dict, inp: Dict, metrics: List[Metric], out_dir: Path,
         ("precip_partition.png", lambda p: plot_partition(flux, inp, p)),
     ]
     if disch is not None:
-        renderers.append(("hydrographs.png", lambda p: plot_hydrographs(disch, dstats, inp, p)))
+        renderers.append(
+            ("hydrographs.png", lambda p: plot_hydrographs(disch, dstats, inp, p))
+        )
         renderers.append(("flow_duration.png", lambda p: plot_flow_duration(disch, p)))
     if terr is not None:
-        renderers.append(("terrain_maps.png", lambda p: plot_terrain(terr, tstats or {}, p)))
+        renderers.append(
+            ("terrain_maps.png", lambda p: plot_terrain(terr, tstats or {}, p))
+        )
     if pstats is not None:
-        renderers.append(("precip_maps.png", lambda p: plot_precip_maps(inp, pstats, p)))
+        renderers.append(
+            ("precip_maps.png", lambda p: plot_precip_maps(inp, pstats, p))
+        )
     if params is not None:
         renderers.append(("parameter_rails.png", lambda p: plot_parameters(params, p)))
 

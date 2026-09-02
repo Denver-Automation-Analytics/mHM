@@ -9,7 +9,7 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-FT3_TO_M3 = 0.028316846592     # conversion factor for ft^3/s -> m^3/s
+FT3_TO_M3 = 0.028316846592  # conversion factor for ft^3/s -> m^3/s
 
 
 def to_m3s(df: pd.DataFrame, nodata: int) -> pd.DataFrame:
@@ -21,9 +21,7 @@ def to_m3s(df: pd.DataFrame, nodata: int) -> pd.DataFrame:
     return out
 
 
-def filter_by_qualifiers(df: pd.DataFrame,
-                         policy: str,
-                         nodata: int) -> pd.DataFrame:
+def filter_by_qualifiers(df: pd.DataFrame, policy: str, nodata: int) -> pd.DataFrame:
     """
     Apply the qualifier policy. Rows failing the policy have their value set to
     `nodata` so the time index stays regular (required by mHM).
@@ -88,7 +86,7 @@ def write_gauge_file(
     filled = filled.ffill().bfill().fillna(nodata)
 
     start = filled.index.min()
-    end   = filled.index.max()
+    end = filled.index.max()
 
     header_lines = [
         f"{local_id}: {name} / USGS-{site_no}",

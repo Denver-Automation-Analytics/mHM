@@ -26,11 +26,11 @@ def load_header(path: str | Path) -> dict:
         key, val = line.split()
         parsed[key] = val
     return {
-        "ncols":        int(parsed["ncols"]),
-        "nrows":        int(parsed["nrows"]),
-        "xllcorner":    float(parsed["xllcorner"]),
-        "yllcorner":    float(parsed["yllcorner"]),
-        "cellsize":     float(parsed["cellsize"]),
+        "ncols": int(parsed["ncols"]),
+        "nrows": int(parsed["nrows"]),
+        "xllcorner": float(parsed["xllcorner"]),
+        "yllcorner": float(parsed["yllcorner"]),
+        "cellsize": float(parsed["cellsize"]),
         "NODATA_value": float(parsed["NODATA_value"]),
     }
 

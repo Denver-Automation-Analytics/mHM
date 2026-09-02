@@ -22,9 +22,7 @@ def detect_time_freq(ds: xr.Dataset) -> tuple[str, pd.Timestamp]:
     times = pd.to_datetime(ds["time"].values)
     if len(times) < 2:
         raise ValueError("Dataset has fewer than 2 time steps.")
-    median_hours = (
-        pd.Series(np.diff(times.values)).median() / np.timedelta64(1, "h")
-    )
+    median_hours = pd.Series(np.diff(times.values)).median() / np.timedelta64(1, "h")
     if 20.0 <= median_hours <= 28.0:
         stat_freq = "daily"
     elif 0.9 <= median_hours <= 1.1:
@@ -46,10 +44,10 @@ def load_header(header_path: Path) -> dict:
         key, val = line.split(maxsplit=1)
         parsed[key] = val
     return {
-        "ncols":        int(parsed["ncols"]),
-        "nrows":        int(parsed["nrows"]),
-        "xllcorner":    float(parsed["xllcorner"]),
-        "yllcorner":    float(parsed["yllcorner"]),
-        "cellsize":     float(parsed["cellsize"]),
+        "ncols": int(parsed["ncols"]),
+        "nrows": int(parsed["nrows"]),
+        "xllcorner": float(parsed["xllcorner"]),
+        "yllcorner": float(parsed["yllcorner"]),
+        "cellsize": float(parsed["cellsize"]),
         "NODATA_value": float(parsed["NODATA_value"]),
     }

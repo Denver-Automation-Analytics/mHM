@@ -31,9 +31,15 @@ from config import N_OMP_THREADS, WORKING_DIR, START_DATE, END_DATE, EVAL_START_
 from metrics import compute_metrics, metrics_to_dict
 import plots
 import stats
-from readers import (read_fluxes, read_inputs, resolve_window,
-                     read_discharge, read_discharge_from_qrouted, read_terrain,
-                     read_parameters)
+from readers import (
+    read_fluxes,
+    read_inputs,
+    resolve_window,
+    read_discharge,
+    read_discharge_from_qrouted,
+    read_terrain,
+    read_parameters,
+)
 
 MHM_BINARY = "/workspace/build/mhm"
 FLUX_FILE = "mHM_Fluxes_States.nc"
@@ -72,7 +78,8 @@ def inject_calibrated_params(work: Path) -> None:
         raise FileNotFoundError(
             f"Calibrated parameter file not found: {final}\n"
             "mod20 requires the calibrated parameters. Run mod19 calibration to "
-            "completion first (it writes FinalParam.nml to WORKING_DIR).")
+            "completion first (it writes FinalParam.nml to WORKING_DIR)."
+        )
     _backup_once(param)
     shutil.copy2(final, param)
     log.info("Injected calibrated parameters: %s → %s", final.name, param.name)
@@ -117,14 +124,19 @@ def write_forward_nml(work: Path) -> None:
         count=1,
         flags=re.MULTILINE | re.IGNORECASE,
     )
-    if n == 0 and not re.search(r"^\s*optimize\s*=\s*\.FALSE\.", text,
-                                re.MULTILINE | re.IGNORECASE):
+    if n == 0 and not re.search(
+        r"^\s*optimize\s*=\s*\.FALSE\.", text, re.MULTILINE | re.IGNORECASE
+    ):
         raise ValueError(f"Could not find an 'optimize' switch in {nml}.")
     new_text = _set_eval_period(new_text, EVAL_START_DATE, END_DATE)
     new_text = _extend_lcover_start(new_text, START_DATE)
     nml.write_text(new_text)
-    log.info("Forward-mode namelist ready (optimize=.FALSE., eval_Per=%s..%s): %s",
-             EVAL_START_DATE, END_DATE, nml)
+    log.info(
+        "Forward-mode namelist ready (optimize=.FALSE., eval_Per=%s..%s): %s",
+        EVAL_START_DATE,
+        END_DATE,
+        nml,
+    )
 
 
 def _extend_lcover_start(text: str, start: str) -> str:
@@ -137,8 +149,12 @@ def _extend_lcover_start(text: str, start: str) -> str:
     m = re.search(r"LCoverYearStart\(1\)\s*=\s*(\d+)", text)
     if m and int(m.group(1)) > ys:
         text = re.sub(r"(LCoverYearStart\(1\)\s*=\s*)\d+", rf"\g<1>{ys}", text, count=1)
-        log.info("Extended LCoverYearStart(1) %s → %s to cover the run "
-                 "(single land-cover scene applied to all years).", m.group(1), ys)
+        log.info(
+            "Extended LCoverYearStart(1) %s → %s to cover the run "
+            "(single land-cover scene applied to all years).",
+            m.group(1),
+            ys,
+        )
     return text
 
 
@@ -148,7 +164,9 @@ def write_minimal_outputs_nml(work: Path) -> None:
     if not nml.exists():
         raise FileNotFoundError(f"Missing {nml}. Run mod19 to assemble it first.")
     _backup_once(nml)
-    wanted = DIAG_OUTPUT_CASES | (STORAGE_OUTPUT_CASES if INCLUDE_STORAGE_STATES else set())
+    wanted = DIAG_OUTPUT_CASES | (
+        STORAGE_OUTPUT_CASES if INCLUDE_STORAGE_STATES else set()
+    )
 
     def _toggle(m: "re.Match[str]") -> str:
         flag = ".TRUE." if int(m.group(2)) in wanted else ".FALSE."
@@ -157,12 +175,18 @@ def write_minimal_outputs_nml(work: Path) -> None:
     text = nml.read_text()
     new_text, n = re.subn(
         r"(?P<head>outputFlxState\((\d+)\)\s*=\s*)\.(?:TRUE|FALSE)\.",
-        _toggle, text, flags=re.IGNORECASE)
+        _toggle,
+        text,
+        flags=re.IGNORECASE,
+    )
     if n == 0:
         raise ValueError(f"No outputFlxState switches found in {nml}.")
     nml.write_text(new_text)
-    log.info("Minimal mhm_outputs.nml: %d field-case(s) enabled (%s)",
-             len(wanted), ", ".join(map(str, sorted(wanted))))
+    log.info(
+        "Minimal mhm_outputs.nml: %d field-case(s) enabled (%s)",
+        len(wanted),
+        ", ".join(map(str, sorted(wanted))),
+    )
 
 
 def _set_mrm_output_timestep(work: Path, ts: int = 1) -> None:
@@ -176,8 +200,13 @@ def _set_mrm_output_timestep(work: Path, ts: int = 1) -> None:
         raise FileNotFoundError(f"Missing {nml}. Run mod19 to assemble it first.")
     _backup_once(nml)
     text = nml.read_text()
-    new_text, n = re.subn(r"^(\s*timeStep_model_outputs_mrm\s*=\s*)-?\d+",
-                          rf"\g<1>{ts}", text, count=1, flags=re.MULTILINE)
+    new_text, n = re.subn(
+        r"^(\s*timeStep_model_outputs_mrm\s*=\s*)-?\d+",
+        rf"\g<1>{ts}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
     if n == 0:
         raise ValueError(f"timeStep_model_outputs_mrm not found in {nml}.")
     nml.write_text(new_text)
@@ -205,15 +234,20 @@ def run_mhm(work: Path) -> None:
     # writing all outputs; the caller validates the flux file, so only a real STOP
     # error (positive exit code) should abort here.
     if proc.returncode < 0:
-        log.warning("mHM terminated by signal %d after finishing; continuing "
-                    "(outputs are validated next).", -proc.returncode)
+        log.warning(
+            "mHM terminated by signal %d after finishing; continuing "
+            "(outputs are validated next).",
+            -proc.returncode,
+        )
     elif proc.returncode != 0:
         raise RuntimeError(f"mHM exited with code {proc.returncode}.")
 
 
 def _print_summary(metrics, window) -> None:
     log.info("=" * 78)
-    log.info("mHM RESULTS DIAGNOSTICS  (water-year window %s .. %s)", window[0], window[1])
+    log.info(
+        "mHM RESULTS DIAGNOSTICS  (water-year window %s .. %s)", window[0], window[1]
+    )
     log.info("%-28s %12s %-14s %-6s", "metric", "value", "units", "verdict")
     log.info("-" * 78)
     for m in metrics:
@@ -233,25 +267,38 @@ def _print_summary(metrics, window) -> None:
 def _print_hydro_summary(dstats) -> None:
     log.info("=" * 78)
     log.info("HYDROGRAPH SKILL (simulated vs. observed discharge)")
-    log.info("%-10s %8s %8s %8s %9s %10s", "gauge", "KGE", "NSE", "logNSE", "PBIAS%", "n_obs")
+    log.info(
+        "%-10s %8s %8s %8s %9s %10s", "gauge", "KGE", "NSE", "logNSE", "PBIAS%", "n_obs"
+    )
     log.info("-" * 78)
     for s in dstats:
         if s.get("n_obs", 0) == 0:
             log.info("%-10s %8s %8s %8s %9s %10d", s["site_no"], "-", "-", "-", "-", 0)
             continue
+
         def _f(v):
             return "n/a" if v is None else f"{v:8.3f}"
-        log.info("%-10s %8s %8s %8s %9s %10d", s["site_no"], _f(s["kge"]), _f(s["nse"]),
-                 _f(s["lognse"]),
-                 "n/a" if s["pbias_pct"] is None else f"{s['pbias_pct']:8.1f}",
-                 s["n_obs"])
+
+        log.info(
+            "%-10s %8s %8s %8s %9s %10d",
+            s["site_no"],
+            _f(s["kge"]),
+            _f(s["nse"]),
+            _f(s["lognse"]),
+            "n/a" if s["pbias_pct"] is None else f"{s['pbias_pct']:8.1f}",
+            s["n_obs"],
+        )
     log.info("=" * 78)
 
 
 def _print_param_summary(pstat) -> None:
     log.info("=" * 78)
-    log.info("CALIBRATED PARAMETERS: %d free, %d rail-pinned, %d fixed",
-             pstat["n_free"], pstat["n_railed"], pstat["n_fixed"])
+    log.info(
+        "CALIBRATED PARAMETERS: %d free, %d rail-pinned, %d fixed",
+        pstat["n_free"],
+        pstat["n_railed"],
+        pstat["n_fixed"],
+    )
     if pstat["railed"]:
         log.warning("Rail-pinned (value at a bound): %s", ", ".join(pstat["railed"]))
     else:
@@ -261,10 +308,17 @@ def _print_param_summary(pstat) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Inspect mHM results (water balance).")
-    ap.add_argument("--skip-run", action="store_true",
-                    help="Reuse the existing flux file instead of running mHM.")
-    ap.add_argument("--spinup-years", type=int, default=1,
-                    help="Water years to drop as spin-up before analysis (default 1).")
+    ap.add_argument(
+        "--skip-run",
+        action="store_true",
+        help="Reuse the existing flux file instead of running mHM.",
+    )
+    ap.add_argument(
+        "--spinup-years",
+        type=int,
+        default=1,
+        help="Water years to drop as spin-up before analysis (default 1).",
+    )
     args = ap.parse_args()
 
     work = Path(WORKING_DIR)
@@ -272,16 +326,17 @@ def main() -> None:
     flux_nc = out_dir / FLUX_FILE
 
     if args.skip_run:
-    # if True:
+        # if True:
         if not flux_nc.exists():
             raise FileNotFoundError(
-                f"--skip-run set but {flux_nc} is missing; run without it first.")
+                f"--skip-run set but {flux_nc} is missing; run without it first."
+            )
         log.info("Skipping forward run; reusing %s", flux_nc)
     else:
         inject_calibrated_params(work)
         write_forward_nml(work)
         write_minimal_outputs_nml(work)
-        _set_mrm_output_timestep(work, 1)   # hourly Qrouted for the discharge fallback
+        _set_mrm_output_timestep(work, 1)  # hourly Qrouted for the discharge fallback
         # Remove stale gridded outputs so mHM writes fresh files (avoids file locks).
         for stale in (flux_nc, out_dir / "mRM_Fluxes_States.nc"):
             if stale.exists():
@@ -290,7 +345,8 @@ def main() -> None:
         if not flux_nc.exists():
             raise FileNotFoundError(
                 f"Forward run finished but {flux_nc} was not written. "
-                "Check outputFlxState switches in mhm_outputs.nml.")
+                "Check outputFlxState switches in mhm_outputs.nml."
+            )
 
     log.info("Reading fluxes: %s", flux_nc)
     window = resolve_window(flux_nc, args.spinup_years)
@@ -320,10 +376,14 @@ def main() -> None:
         except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
             # mHM's at-exit crash can truncate discharge.nc; recover the hydrograph
             # from the routed-flow grid (written before the crash).
-            log.warning("discharge file unusable (%s); recovering hydrograph from %s.",
-                        exc, MRM_FLUX_FILE)
-            disch = read_discharge_from_qrouted(out_dir / MRM_FLUX_FILE,
-                                                work / "mhm_input/gauge", window)
+            log.warning(
+                "discharge file unusable (%s); recovering hydrograph from %s.",
+                exc,
+                MRM_FLUX_FILE,
+            )
+            disch = read_discharge_from_qrouted(
+                out_dir / MRM_FLUX_FILE, work / "mhm_input/gauge", window
+            )
         dstats = stats.discharge_stats(disch)
         _print_hydro_summary(dstats)
     except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
@@ -349,10 +409,12 @@ def main() -> None:
     report = {
         "eval_start": window[0],
         "eval_end": window[1],
-        "totals_mm": {**flux["totals"],
-                      "pre_input": inp["totals"]["pre"],
-                      "pet_input": inp["totals"]["pet"],
-                      "delta_storage": flux["delta_storage"]},
+        "totals_mm": {
+            **flux["totals"],
+            "pre_input": inp["totals"]["pre"],
+            "pet_input": inp["totals"]["pet"],
+            "delta_storage": flux["delta_storage"],
+        },
         "metrics": metrics_to_dict(metrics),
         "hydrograph": dstats,
         "terrain": tstats,
@@ -364,10 +426,18 @@ def main() -> None:
     log.info("Wrote report: %s", report_path)
 
     plot_dir = out_dir / "diagnostics"
-    paths = plots.write_all(flux, inp, metrics, plot_dir,
-                            disch=disch, dstats=dstats,
-                            terr=terr, tstats=tstats, pstats=pstats,
-                            params=params)
+    paths = plots.write_all(
+        flux,
+        inp,
+        metrics,
+        plot_dir,
+        disch=disch,
+        dstats=dstats,
+        terr=terr,
+        tstats=tstats,
+        pstats=pstats,
+        params=params,
+    )
     log.info("Wrote %d diagnostic plots to %s", len(paths), plot_dir)
 
 

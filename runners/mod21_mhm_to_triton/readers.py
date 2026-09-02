@@ -4,6 +4,7 @@ Loads the mHM gridded runoff cube, the flow-accumulation grid used to locate the
 domain outlet, and the gauge coordinates used for TRITON observation points. All
 spatial data is returned in the projected TRITON CRS (config.OUTPUT_CRS).
 """
+
 from __future__ import annotations
 
 import os
@@ -31,7 +32,9 @@ def step_hours(timestep: str = TIMESTEP) -> int:
     try:
         return STEP_HOURS[timestep]
     except KeyError:
-        raise ValueError(f"Unsupported TIMESTEP {timestep!r}; expected one of {list(STEP_HOURS)}.")
+        raise ValueError(
+            f"Unsupported TIMESTEP {timestep!r}; expected one of {list(STEP_HOURS)}."
+        )
 
 
 def read_runoff(flux_nc: Path, start=None, end=None) -> Dict:
@@ -46,14 +49,16 @@ def read_runoff(flux_nc: Path, start=None, end=None) -> Dict:
     if RUNOFF_VAR not in ds:
         raise KeyError(
             f"Runoff variable {RUNOFF_VAR!r} missing from {flux_nc}. Enable the "
-            "total-runoff output (outputFlxState Q) and rerun mHM.")
+            "total-runoff output (outputFlxState Q) and rerun mHM."
+        )
     da = ds[RUNOFF_VAR]
     if start is not None or end is not None:
         da = da.sel(time=slice(start, end))
         if da.sizes.get("time", 0) == 0:
             raise ValueError(
                 f"No runoff steps in window {start}..{end} (record spans "
-                f"{str(ds['time'].values[0])[:10]}..{str(ds['time'].values[-1])[:10]}).")
+                f"{str(ds['time'].values[0])[:10]}..{str(ds['time'].values[-1])[:10]})."
+            )
     east = np.asarray(ds["easting"].values, dtype=float)
     north = np.asarray(ds["northing"].values, dtype=float)
     cs = float(abs(east[1] - east[0]))
@@ -70,7 +75,9 @@ def read_runoff(flux_nc: Path, start=None, end=None) -> Dict:
     }
 
 
-def runoff_onset_index(runoff: Dict, step_h: int, threshold_mm_hr: float) -> Optional[int]:
+def runoff_onset_index(
+    runoff: Dict, step_h: int, threshold_mm_hr: float
+) -> Optional[int]:
     """Index of the first step whose domain-mean runoff intensity >= threshold.
 
     The mHM runoff cube (mm per output step) is converted to a mm/hr intensity
@@ -107,18 +114,22 @@ def read_gauges(id_map_csv: Path) -> List[Dict]:
     xs, ys = tf.transform(df["lon"].to_numpy(), df["lat"].to_numpy())
     gauges: List[Dict] = []
     for i, row in df.reset_index(drop=True).iterrows():
-        gauges.append({
-            "site_no": str(row.get("site_no", "")),
-            "name": str(row.get("name", "")),
-            "x": float(xs[i]),
-            "y": float(ys[i]),
-        })
+        gauges.append(
+            {
+                "site_no": str(row.get("site_no", "")),
+                "name": str(row.get("name", "")),
+                "x": float(xs[i]),
+                "y": float(ys[i]),
+            }
+        )
     if not gauges:
         raise ValueError(f"No gauges found in {id_map_csv}.")
     return gauges
 
 
-def read_manning_lookup(tif: Path, mapping: Dict[int, float]) -> Tuple[Dict[int, float], float]:
+def read_manning_lookup(
+    tif: Path, mapping: Dict[int, float]
+) -> Tuple[Dict[int, float], float]:
     """Return ({class code: Manning n}, raster nodata) for the land-cover *tif*.
 
     The raster carries no roughness attribute, so the code->n map is supplied by
@@ -133,8 +144,7 @@ def read_manning_lookup(tif: Path, mapping: Dict[int, float]) -> Tuple[Dict[int,
     return lut, nodata
 
 
-def read_baseflow_preevent(flux_nc: Path, start_date=None,
-                           var: str = "QB") -> Dict:
+def read_baseflow_preevent(flux_nc: Path, start_date=None, var: str = "QB") -> Dict:
     """Return the baseflow rate field [m/s] at the step just before the event.
 
     Picks the last mHM output step strictly earlier than *start_date* (or the

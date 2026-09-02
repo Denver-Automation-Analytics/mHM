@@ -9,7 +9,9 @@ import numpy as np
 import xarray as xr
 
 # import header_to_latlon from mod11 by path to avoid sys.path conflicts
-_latlon_grid_path = Path(__file__).parent.parent / "mod11_meteo_to_mhm" / "latlon_grid.py"
+_latlon_grid_path = (
+    Path(__file__).parent.parent / "mod11_meteo_to_mhm" / "latlon_grid.py"
+)
 _spec = importlib.util.spec_from_file_location("latlon_grid", _latlon_grid_path)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
@@ -40,4 +42,3 @@ def compute_latitude_from_header(header_path: Path, coord_sys: str) -> np.ndarra
     """
     _lons, lats, _xx, _yy, _miss = header_to_latlon(header_path, coord_sys)
     return lats
-

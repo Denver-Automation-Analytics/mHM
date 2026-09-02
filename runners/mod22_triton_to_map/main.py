@@ -22,6 +22,7 @@ warning) when their required inputs (DEM, clip, performance logs) are missing.
 
 Run order: a TRITON run producing gtiff outputs -> mod22.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,14 +35,32 @@ from typing import Callable, Dict, List
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (END_DATE, L1_CELL_SIZE_M, NODATA, TRITON_COMPARE_OUT_DIR,
-                    TRITON_COMPARE_POINTS, TRITON_COMPARE_TZ, TRITON_GIF_CMAP,
-                    TRITON_GIF_FPS, TRITON_GIF_MAX_FRAMES, TRITON_GIF_VARS,
-                    TRITON_MAP_CFG, TRITON_MAP_CLIP, TRITON_MAP_DEM_TIF,
-                    TRITON_MAP_GTIFF_DIR, TRITON_MAP_HMIN, TRITON_MAP_MIN_DEPTH,
-                    TRITON_MAP_OUT_DIR, TRITON_MAP_SERIES_DIR, TRITON_PERF_DIR,
-                    TRITON_PERF_ROFF, TRITON_PERF_SUMMARY, TRITON_PERF_WET_VAR,
-                    TRITON_START_DATE, TRITON_START_FILE)
+from config import (
+    END_DATE,
+    L1_CELL_SIZE_M,
+    NODATA,
+    TRITON_COMPARE_OUT_DIR,
+    TRITON_COMPARE_POINTS,
+    TRITON_COMPARE_TZ,
+    TRITON_GIF_CMAP,
+    TRITON_GIF_FPS,
+    TRITON_GIF_MAX_FRAMES,
+    TRITON_GIF_VARS,
+    TRITON_MAP_CFG,
+    TRITON_MAP_CLIP,
+    TRITON_MAP_DEM_TIF,
+    TRITON_MAP_GTIFF_DIR,
+    TRITON_MAP_HMIN,
+    TRITON_MAP_MIN_DEPTH,
+    TRITON_MAP_OUT_DIR,
+    TRITON_MAP_SERIES_DIR,
+    TRITON_PERF_DIR,
+    TRITON_PERF_ROFF,
+    TRITON_PERF_SUMMARY,
+    TRITON_PERF_WET_VAR,
+    TRITON_START_DATE,
+    TRITON_START_FILE,
+)
 
 import compare
 import gifs
@@ -60,32 +79,117 @@ log = logging.getLogger("triton_to_map")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Consolidate TRITON gtiff outputs into netCDF + max maps.")
-    p.add_argument("--gtiff-dir", default=TRITON_MAP_GTIFF_DIR, help="directory of TRITON per-timestep GeoTIFFs")
-    p.add_argument("--out-dir", default=TRITON_MAP_OUT_DIR, help="output directory for netCDF + max GeoTIFFs")
-    p.add_argument("--cfg", default=TRITON_MAP_CFG, help="TRITON .cfg parsed for print_interval")
-    p.add_argument("--start-date", default=TRITON_START_DATE, help="anchor date 'YYYY-MM-DD' for the time axis")
-    p.add_argument("--start-file", default=TRITON_START_FILE, help="sidecar with the mod21-resolved sim start datetime; overrides --start-date when present")
-    p.add_argument("--hmin", type=float, default=TRITON_MAP_HMIN, help="depth floor [m] below which velocity is masked")
-    p.add_argument("--min-depth", type=float, default=TRITON_MAP_MIN_DEPTH, help="depth floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)")
-    p.add_argument("--remax", action="store_true", help="rebuild only the max GeoTIFF from the cached netCDF (skips re-reading the gtiffs)")
-    p.add_argument("--clip", default=TRITON_MAP_CLIP, help="watershed polygon to clip maps to (cells outside -> NODATA); empty string disables")
-    p.add_argument("--force", action="store_true", help="regenerate outputs even if they already exist")
-    p.add_argument("--gif-fps", type=int, default=TRITON_GIF_FPS, help="GIF playback frame rate")
-    p.add_argument("--gif-max-frames", type=int, default=TRITON_GIF_MAX_FRAMES, help="evenly-strided timestep cap per GIF")
-    p.add_argument("--dem", default=TRITON_MAP_DEM_TIF, help="DEM GeoTIFF used as the GIF hillshade background")
-    p.add_argument("--perf-summary", default=TRITON_PERF_SUMMARY, help="TRITON performance.txt final per-rank summary")
-    p.add_argument("--perf-dir", default=TRITON_PERF_DIR, help="directory of TRITON performanceN.txt per-step timing files")
-    p.add_argument("--roff", default=TRITON_PERF_ROFF, help="TRITON .roff gridded runoff input (domain applied-runoff overlay)")
-    p.add_argument("--series-dir", default=TRITON_MAP_SERIES_DIR, help="directory of TRITON stage time-series files (<name>_at_Xsec.txt)")
-    p.add_argument("--compare", action="store_true", help="overlay TRITON depth at TRITON_COMPARE_POINTS lat/lon against the observed USGS gauge stage")
-    p.add_argument("--compare-out", default=TRITON_COMPARE_OUT_DIR, help="output directory for the compare_<gauge>.png hydrograph overlays")
+    p = argparse.ArgumentParser(
+        description="Consolidate TRITON gtiff outputs into netCDF + max maps."
+    )
+    p.add_argument(
+        "--gtiff-dir",
+        default=TRITON_MAP_GTIFF_DIR,
+        help="directory of TRITON per-timestep GeoTIFFs",
+    )
+    p.add_argument(
+        "--out-dir",
+        default=TRITON_MAP_OUT_DIR,
+        help="output directory for netCDF + max GeoTIFFs",
+    )
+    p.add_argument(
+        "--cfg", default=TRITON_MAP_CFG, help="TRITON .cfg parsed for print_interval"
+    )
+    p.add_argument(
+        "--start-date",
+        default=TRITON_START_DATE,
+        help="anchor date 'YYYY-MM-DD' for the time axis",
+    )
+    p.add_argument(
+        "--start-file",
+        default=TRITON_START_FILE,
+        help="sidecar with the mod21-resolved sim start datetime; overrides --start-date when present",
+    )
+    p.add_argument(
+        "--hmin",
+        type=float,
+        default=TRITON_MAP_HMIN,
+        help="depth floor [m] below which velocity is masked",
+    )
+    p.add_argument(
+        "--min-depth",
+        type=float,
+        default=TRITON_MAP_MIN_DEPTH,
+        help="depth floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)",
+    )
+    p.add_argument(
+        "--remax",
+        action="store_true",
+        help="rebuild only the max GeoTIFF from the cached netCDF (skips re-reading the gtiffs)",
+    )
+    p.add_argument(
+        "--clip",
+        default=TRITON_MAP_CLIP,
+        help="watershed polygon to clip maps to (cells outside -> NODATA); empty string disables",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="regenerate outputs even if they already exist",
+    )
+    p.add_argument(
+        "--gif-fps", type=int, default=TRITON_GIF_FPS, help="GIF playback frame rate"
+    )
+    p.add_argument(
+        "--gif-max-frames",
+        type=int,
+        default=TRITON_GIF_MAX_FRAMES,
+        help="evenly-strided timestep cap per GIF",
+    )
+    p.add_argument(
+        "--dem",
+        default=TRITON_MAP_DEM_TIF,
+        help="DEM GeoTIFF used as the GIF hillshade background",
+    )
+    p.add_argument(
+        "--perf-summary",
+        default=TRITON_PERF_SUMMARY,
+        help="TRITON performance.txt final per-rank summary",
+    )
+    p.add_argument(
+        "--perf-dir",
+        default=TRITON_PERF_DIR,
+        help="directory of TRITON performanceN.txt per-step timing files",
+    )
+    p.add_argument(
+        "--roff",
+        default=TRITON_PERF_ROFF,
+        help="TRITON .roff gridded runoff input (domain applied-runoff overlay)",
+    )
+    p.add_argument(
+        "--series-dir",
+        default=TRITON_MAP_SERIES_DIR,
+        help="directory of TRITON stage time-series files (<name>_at_Xsec.txt)",
+    )
+    p.add_argument(
+        "--compare",
+        action="store_true",
+        help="overlay TRITON depth at TRITON_COMPARE_POINTS lat/lon against the observed USGS gauge stage",
+    )
+    p.add_argument(
+        "--compare-out",
+        default=TRITON_COMPARE_OUT_DIR,
+        help="output directory for the compare_<gauge>.png hydrograph overlays",
+    )
     return p.parse_args()
 
 
-def _consolidate(var: str, producer: Callable[[int], np.ndarray], n_steps: int,
-                 grid: Dict, times, out_dir: Path, force: bool, remax: bool,
-                 mask: np.ndarray = None) -> None:
+def _consolidate(
+    var: str,
+    producer: Callable[[int], np.ndarray],
+    n_steps: int,
+    grid: Dict,
+    times,
+    out_dir: Path,
+    force: bool,
+    remax: bool,
+    mask: np.ndarray = None,
+) -> None:
     """Stream *n_steps* slices from *producer* into ``<var>.nc`` and ``<var>_max.tif``.
 
     ``producer(t)`` returns a (ny, nx) float32 array with NaN at invalid cells;
@@ -143,8 +247,16 @@ def main() -> int:
         start_file = Path(args.start_file) if args.start_file else None
         if start_file and start_file.exists():
             start_date = start_file.read_text().strip()
-        written = compare.run(TRITON_COMPARE_POINTS, h_nc, dem, TRITON_COMPARE_TZ,
-                              start_date, END_DATE, NODATA, Path(args.compare_out))
+        written = compare.run(
+            TRITON_COMPARE_POINTS,
+            h_nc,
+            dem,
+            TRITON_COMPARE_TZ,
+            start_date,
+            END_DATE,
+            NODATA,
+            Path(args.compare_out),
+        )
         log.info("Compare: wrote %d plot(s) to %s", len(written), args.compare_out)
         return 0
 
@@ -158,19 +270,33 @@ def main() -> int:
     if not avail:
         log.error("No TRITON gtiff series (<VAR>_<NN>.vrt) found in %s", gtiff)
         return 1
-    log.info("Variables present: %s", ", ".join(f"{v}({len(p)})" for v, p in avail.items()))
+    log.info(
+        "Variables present: %s", ", ".join(f"{v}({len(p)})" for v, p in avail.items())
+    )
 
     start_file = Path(args.start_file) if args.start_file else None
     if start_file and start_file.exists():
         args.start_date = start_file.read_text().strip()
-        log.info("Anchoring time axis to mod21-resolved sim start %s (from %s)", args.start_date, start_file.name)
+        log.info(
+            "Anchoring time axis to mod21-resolved sim start %s (from %s)",
+            args.start_date,
+            start_file.name,
+        )
 
     interval = readers.parse_print_interval(Path(args.cfg))
-    log.info("Output cadence: print_interval=%ds, time anchored at %s", interval, args.start_date)
+    log.info(
+        "Output cadence: print_interval=%ds, time anchored at %s",
+        interval,
+        args.start_date,
+    )
 
     grid = readers.read_grid(next(iter(avail.values()))[0])
-    log.info("Grid: %d x %d cells, CRS %s (native, no reprojection)",
-             grid["nx"], grid["ny"], grid["epsg"] or "unknown")
+    log.info(
+        "Grid: %d x %d cells, CRS %s (native, no reprojection)",
+        grid["nx"],
+        grid["ny"],
+        grid["epsg"] or "unknown",
+    )
 
     mask = None
     if args.clip:
@@ -179,8 +305,12 @@ def main() -> int:
             log.error("Clip boundary not found: %s", clip)
             return 1
         mask = readers.build_watershed_mask(clip, grid)
-        log.info("Clipping maps to %s (%d/%d cells inside)",
-                 clip.name, int(mask.sum()), mask.size)
+        log.info(
+            "Clipping maps to %s (%d/%d cells inside)",
+            clip.name,
+            int(mask.sum()),
+            mask.size,
+        )
 
     # H and MH: copied from the gtiff series, masking cells below the depth floor.
     min_depth = float(args.min_depth)
@@ -199,15 +329,22 @@ def main() -> int:
                 arr = np.where(arr >= min_depth, arr, np.float32(np.nan))
             return arr
 
-        _consolidate(var, producer, len(paths), grid, times, out, args.force, args.remax, mask)
+        _consolidate(
+            var, producer, len(paths), grid, times, out, args.force, args.remax, mask
+        )
 
     # V: derived from QX/QY unit discharge and H (only when QX and QY exist).
     if {"QX", "QY"}.issubset(avail) and "H" in avail:
         qx, qy, h = avail["QX"], avail["QY"], avail["H"]
         n = min(len(qx), len(qy), len(h))
         if not (len(qx) == len(qy) == len(h)):
-            log.warning("QX/QY/H step counts differ (%d/%d/%d); using first %d.",
-                        len(qx), len(qy), len(h), n)
+            log.warning(
+                "QX/QY/H step counts differ (%d/%d/%d); using first %d.",
+                len(qx),
+                len(qy),
+                len(h),
+                n,
+            )
         times = readers.build_time_axis(n, args.start_date, interval)
         hmin = float(args.hmin)
 
@@ -229,7 +366,9 @@ def main() -> int:
         log.warning("GIF DEM not found: %s; skipping GIF animations.", dem)
     else:
         hillshade = readers.read_hillshade(dem, grid)
-        boundary = readers.read_boundary_line(Path(args.clip), grid) if args.clip else None
+        boundary = (
+            readers.read_boundary_line(Path(args.clip), grid) if args.clip else None
+        )
         for var in TRITON_GIF_VARS:
             nc_path = out / f"{var}.nc"
             gif_path = out / f"{var}.gif"
@@ -239,16 +378,28 @@ def main() -> int:
             if gif_path.exists() and not args.force:
                 log.info("Skip (exists): %s", gif_path.name)
                 continue
-            n_used = gifs.make_gif(nc_path, var, grid, hillshade, boundary,
-                                   TRITON_GIF_CMAP[var], args.gif_fps, NODATA, gif_path,
-                                   args.gif_max_frames)
+            n_used = gifs.make_gif(
+                nc_path,
+                var,
+                grid,
+                hillshade,
+                boundary,
+                TRITON_GIF_CMAP[var],
+                args.gif_fps,
+                NODATA,
+                gif_path,
+                args.gif_max_frames,
+            )
             log.info("Wrote %s (%d frames)", gif_path.name, n_used)
 
     summary_path = Path(args.perf_summary)
     perf_dir = Path(args.perf_dir)
     if not summary_path.exists() or not perf_dir.is_dir():
-        log.warning("TRITON performance logs not found (%s / %s); skipping performance diagnostics.",
-                   summary_path, perf_dir)
+        log.warning(
+            "TRITON performance logs not found (%s / %s); skipping performance diagnostics.",
+            summary_path,
+            perf_dir,
+        )
     else:
         balance_png = out / "perf_load_balance.png"
         perf_plots.plot_load_balance(perf.read_summary(summary_path), balance_png)
@@ -256,22 +407,41 @@ def main() -> int:
 
         deltas = perf.step_deltas(perf.read_series(perf_dir))
         wet_nc = out / f"{TRITON_PERF_WET_VAR}.nc"
-        wet = perf.wet_stats(wet_nc, TRITON_PERF_WET_VAR, NODATA) if wet_nc.exists() else None
+        wet = (
+            perf.wet_stats(wet_nc, TRITON_PERF_WET_VAR, NODATA)
+            if wet_nc.exists()
+            else None
+        )
         if wet is None:
-            log.warning("%s not found; per-step time series will omit the wet-cell overlay.", wet_nc.name)
+            log.warning(
+                "%s not found; per-step time series will omit the wet-cell overlay.",
+                wet_nc.name,
+            )
         roff_path = Path(args.roff)
         roff = perf.read_roff(roff_path, L1_CELL_SIZE_M) if roff_path.exists() else None
         if roff is None:
-            log.warning("%s not found; per-step time series will omit the applied-runoff overlay.", roff_path.name)
+            log.warning(
+                "%s not found; per-step time series will omit the applied-runoff overlay.",
+                roff_path.name,
+            )
         timeseries_png = out / "perf_timeseries.png"
-        perf_plots.plot_timeseries(deltas, wet, timeseries_png, roff,
-                                   start_date=args.start_date, interval_s=interval)
+        perf_plots.plot_timeseries(
+            deltas,
+            wet,
+            timeseries_png,
+            roff,
+            start_date=args.start_date,
+            interval_s=interval,
+        )
         log.info("Wrote %s", timeseries_png.name)
 
     series_dir = Path(args.series_dir)
     series_files = series.discover_series(series_dir) if series_dir.is_dir() else []
     if not series_files:
-        log.warning("No TRITON stage time-series files found in %s; skipping stage hydrographs.", series_dir)
+        log.warning(
+            "No TRITON stage time-series files found in %s; skipping stage hydrographs.",
+            series_dir,
+        )
     else:
         for sf in series_files:
             stage_png = out / f"stage_{sf.stem}.png"

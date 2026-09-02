@@ -16,6 +16,7 @@ Floyd-Steinberg dithering turns smooth hillshade gradients into a speckled,
 tile-like pattern that reads as a decomposed/patchwork raster instead of a
 continuous one).
 """
+
 from __future__ import annotations
 
 import copy
@@ -42,9 +43,20 @@ def _frame_indices(n: int, max_frames: int) -> np.ndarray:
         return np.unique(np.linspace(0, n - 1, min(n, max_frames)).round().astype(int))
 
 
-def make_gif(nc_path: Path, var: str, grid: Dict, hillshade: np.ndarray,
-            boundary, cmap: str, fps: int, nodata: float, out_gif: Path,
-            max_frames: int, gamma: float = 0.4, dpi: int = 150) -> int:
+def make_gif(
+    nc_path: Path,
+    var: str,
+    grid: Dict,
+    hillshade: np.ndarray,
+    boundary,
+    cmap: str,
+    fps: int,
+    nodata: float,
+    out_gif: Path,
+    max_frames: int,
+    gamma: float = 0.4,
+    dpi: int = 150,
+) -> int:
     """Render *nc_path*'s ``var`` cube to *out_gif*. Returns the frame count used."""
     ds = netCDF4.Dataset(nc_path, "r")
     try:
@@ -77,15 +89,24 @@ def make_gif(nc_path: Path, var: str, grid: Dict, hillshade: np.ndarray,
 
         fig, ax = plt.subplots(figsize=(8, 8 * aspect))
         ax.imshow(hillshade, extent=extent, origin=origin, cmap="gray", aspect="equal")
-        im = ax.imshow(read(idx[0]), extent=extent, origin=origin, cmap=var_cmap,
-                       norm=norm, alpha=0.85, aspect="equal")
+        im = ax.imshow(
+            read(idx[0]),
+            extent=extent,
+            origin=origin,
+            cmap=var_cmap,
+            norm=norm,
+            alpha=0.85,
+            aspect="equal",
+        )
         if boundary is not None:
             boundary.plot(ax=ax, color="black", linewidth=0.8)
         ax.set_xticks([])
         ax.set_yticks([])
         meta = VAR_META.get(var, {})
         fig.colorbar(im, ax=ax, shrink=0.8, label=meta.get("units", ""))
-        title = ax.set_title(f"{meta.get('long_name', var)}  {times[idx[0]]:%Y-%m-%d %H:%M}")
+        title = ax.set_title(
+            f"{meta.get('long_name', var)}  {times[idx[0]]:%Y-%m-%d %H:%M}"
+        )
         fig.tight_layout()
 
         # Render each frame to RGB, then quantize to a shared palette (no dither)
@@ -103,11 +124,19 @@ def make_gif(nc_path: Path, var: str, grid: Dict, hillshade: np.ndarray,
                 base_palette = frame.quantize(colors=256, dither=Image.Dither.NONE)
                 pil_frames.append(base_palette)
             else:
-                pil_frames.append(frame.quantize(palette=base_palette, dither=Image.Dither.NONE))
+                pil_frames.append(
+                    frame.quantize(palette=base_palette, dither=Image.Dither.NONE)
+                )
         plt.close(fig)
 
-        pil_frames[0].save(out_gif, save_all=True, append_images=pil_frames[1:],
-                           duration=int(1000 / fps), loop=0, optimize=False)
+        pil_frames[0].save(
+            out_gif,
+            save_all=True,
+            append_images=pil_frames[1:],
+            duration=int(1000 / fps),
+            loop=0,
+            optimize=False,
+        )
     finally:
         ds.close()
     return len(idx)

@@ -57,22 +57,32 @@ def write_nc_copy(
 
     xs = xll + cs / 2 + np.arange(ncols) * cs
     ys = yll + cs / 2 + np.arange(nrows) * cs
-    ys = ys[::-1]   # north-up
+    ys = ys[::-1]  # north-up
 
     with nc.Dataset(path, "w", format="NETCDF4") as fh:
         fh.createDimension("x", ncols)
         fh.createDimension("y", nrows)
 
-        xv = fh.createVariable("x", "f8", ("x",)); xv.axis = "X"; xv.units = "m"; xv[:] = xs
-        yv = fh.createVariable("y", "f8", ("y",)); yv.axis = "Y"; yv.units = "m"; yv[:] = ys
+        xv = fh.createVariable("x", "f8", ("x",))
+        xv.axis = "X"
+        xv.units = "m"
+        xv[:] = xs
+        yv = fh.createVariable("y", "f8", ("y",))
+        yv.axis = "Y"
+        yv.units = "m"
+        yv[:] = ys
 
         lc = fh.createVariable(
-            "land_cover", "i4", ("y", "x"),
-            zlib=True, complevel=4, fill_value=nodata,
+            "land_cover",
+            "i4",
+            ("y", "x"),
+            zlib=True,
+            complevel=4,
+            fill_value=nodata,
         )
-        lc.long_name    = "mHM land-cover class"
-        lc.units        = "1"
-        lc.flag_values  = np.array([1, 2, 3], dtype="i4")
+        lc.long_name = "mHM land-cover class"
+        lc.units = "1"
+        lc.flag_values = np.array([1, 2, 3], dtype="i4")
         lc.flag_meanings = "forest impervious pervious"
         lc.missing_value = nodata
         lc[:] = grid.astype(np.int32)
@@ -81,8 +91,8 @@ def write_nc_copy(
         crs_var.spatial_ref = crs_wkt
         lc.grid_mapping = "crs"
 
-        fh.year        = year
-        fh.source      = "Space Intelligence GHL (via Earthmover Arraylake)"
+        fh.year = year
+        fh.source = "Space Intelligence GHL (via Earthmover Arraylake)"
         fh.description = "mHM land cover (1=Forest, 2=Impervious, 3=Pervious)"
 
     log.info("Wrote %s", path)

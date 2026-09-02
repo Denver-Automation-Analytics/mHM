@@ -15,6 +15,7 @@ def read_meteo_dates(pre_nc: Path) -> Tuple[date, date]:
     """Return (first_date, last_date) from the pre.nc time coordinate."""
     with xr.open_dataset(pre_nc, decode_times=True) as ds:
         import pandas as pd
+
         t = pd.DatetimeIndex(ds["time"].values)
     return t[0].date(), t[-1].date()
 
@@ -80,7 +81,9 @@ def read_l1_resolution(soil_class_asc: Path) -> int:
     raise ValueError(f"cellsize not found in {soil_class_asc}")
 
 
-def read_soil_info(soil_classdefinition_txt: Path, default_horizons: int = 2) -> Tuple[int, List[int]]:
+def read_soil_info(
+    soil_classdefinition_txt: Path, default_horizons: int = 2
+) -> Tuple[int, List[int]]:
     """
     Return (n_horizons, [soil_Depth(1)..soil_Depth(n-1)]) from LUT.
 
@@ -101,8 +104,8 @@ def read_soil_info(soil_classdefinition_txt: Path, default_horizons: int = 2) ->
             continue
         try:
             soil_type = int(parts[0])
-            horizon   = int(parts[1])
-            ld        = int(parts[3])
+            horizon = int(parts[1])
+            ld = int(parts[3])
         except ValueError:
             continue
         max_horizon = max(max_horizon, horizon)
@@ -163,4 +166,3 @@ def derive_eval_period(
     available_leadin = (eval_start - first_meteo).days
     warming_days = max(0, min(warmup_days, available_leadin))
     return eval_start, eval_end, warming_days
-

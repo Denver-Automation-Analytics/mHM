@@ -5,6 +5,7 @@ DEM into the projected TRITON CRS and resampling to the configured cellsize.
 Every TRITON cell is then tagged with the id of the mHM L1 runoff zone whose
 footprint contains the cell centre, producing the .rmap / .roff pairing.
 """
+
 from __future__ import annotations
 
 import os
@@ -31,16 +32,32 @@ def _dissolved_polygon(domain_file: Path, dst_crs: str) -> gpd.GeoDataFrame:
     """Return the domain as a single (multi)polygon in *dst_crs* for cutlining."""
     dom = gpd.read_file(domain_file).to_crs(dst_crs)
     geom = dom.union_all() if hasattr(dom, "union_all") else dom.unary_union
-    polys = [g for g in getattr(geom, "geoms", [geom]) if isinstance(g, (Polygon, MultiPolygon))]
+    polys = [
+        g
+        for g in getattr(geom, "geoms", [geom])
+        if isinstance(g, (Polygon, MultiPolygon))
+    ]
     if not polys:
-        raise ValueError(f"{domain_file} contains no polygon geometry to use as a cutline.")
-    return gpd.GeoDataFrame(geometry=[MultiPolygon(
-        [p for poly in polys for p in (poly.geoms if isinstance(poly, MultiPolygon) else [poly])]
-    )], crs=dst_crs)
+        raise ValueError(
+            f"{domain_file} contains no polygon geometry to use as a cutline."
+        )
+    return gpd.GeoDataFrame(
+        geometry=[
+            MultiPolygon(
+                [
+                    p
+                    for poly in polys
+                    for p in (poly.geoms if isinstance(poly, MultiPolygon) else [poly])
+                ]
+            )
+        ],
+        crs=dst_crs,
+    )
 
 
-def warp_dem(src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float,
-             out_tif: Path) -> Dict:
+def warp_dem(
+    src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float, out_tif: Path
+) -> Dict:
     """Reproject and resample the DEM to *cellsize* metres over the domain bbox.
 
     Fills the whole domain bounding box (no cutline) so the TRITON DEM is
@@ -52,11 +69,16 @@ def warp_dem(src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float,
     dom = _dissolved_polygon(domain_file, dst_crs)
     minx, miny, maxx, maxy = (float(v) for v in dom.total_bounds)
     gdal.Warp(
-        str(out_tif), str(src_tif),
-        dstSRS=dst_crs, xRes=cellsize, yRes=cellsize,
+        str(out_tif),
+        str(src_tif),
+        dstSRS=dst_crs,
+        xRes=cellsize,
+        yRes=cellsize,
         outputBounds=(minx, miny, maxx, maxy),
-        dstNodata=NODATA, resampleAlg="average",
-        targetAlignedPixels=True, multithread=True,
+        dstNodata=NODATA,
+        resampleAlg="average",
+        targetAlignedPixels=True,
+        multithread=True,
         outputType=gdal.GDT_Float32,
         creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
     )
@@ -65,9 +87,9 @@ def warp_dem(src_tif: Path, domain_file: Path, dst_crs: str, cellsize: float,
     gt = ds.GetGeoTransform()
     grid = {
         "tif": Path(out_tif),
-        "x0": gt[0],              # left edge (upper-left x)
-        "y0": gt[3],              # top edge (upper-left y)
-        "cellsize": gt[1],        # gt[5] == -cellsize for north-up
+        "x0": gt[0],  # left edge (upper-left x)
+        "y0": gt[3],  # top edge (upper-left y)
+        "cellsize": gt[1],  # gt[5] == -cellsize for north-up
         "ncols": ds.RasterXSize,
         "nrows": ds.RasterYSize,
         "nodata": NODATA,
@@ -81,16 +103,27 @@ def read_grid(tif: Path) -> Dict:
     ds = gdal.Open(str(tif))
     gt = ds.GetGeoTransform()
     grid = {
-        "tif": Path(tif), "x0": gt[0], "y0": gt[3], "cellsize": gt[1],
-        "ncols": ds.RasterXSize, "nrows": ds.RasterYSize, "nodata": NODATA,
+        "tif": Path(tif),
+        "x0": gt[0],
+        "y0": gt[3],
+        "cellsize": gt[1],
+        "ncols": ds.RasterXSize,
+        "nrows": ds.RasterYSize,
+        "nodata": NODATA,
     }
     ds = None
     return grid
 
 
-def warp_to_dem_grid(src_tif: Path, domain_file: Path, dst_crs: str, dem_grid: Dict,
-                     out_tif: Path, resample: str = "near",
-                     dst_nodata: float = NODATA) -> Path:
+def warp_to_dem_grid(
+    src_tif: Path,
+    domain_file: Path,
+    dst_crs: str,
+    dem_grid: Dict,
+    out_tif: Path,
+    resample: str = "near",
+    dst_nodata: float = NODATA,
+) -> Path:
     """Warp *src_tif* onto the exact TRITON DEM grid (same extent/cellsize/dims).
 
     Pixels outside the watershed are masked to *dst_nodata*. ``near`` resampling
@@ -105,10 +138,17 @@ def warp_to_dem_grid(src_tif: Path, domain_file: Path, dst_crs: str, dem_grid: D
     xmax, ymin = xmin + dem_grid["ncols"] * cs, ymax - dem_grid["nrows"] * cs
     try:
         gdal.Warp(
-            str(out_tif), str(src_tif),
-            dstSRS=dst_crs, xRes=cs, yRes=cs, outputBounds=[xmin, ymin, xmax, ymax],
-            cutlineDSName=cutline, cropToCutline=False,
-            dstNodata=dst_nodata, resampleAlg=resample, multithread=True,
+            str(out_tif),
+            str(src_tif),
+            dstSRS=dst_crs,
+            xRes=cs,
+            yRes=cs,
+            outputBounds=[xmin, ymin, xmax, ymax],
+            cutlineDSName=cutline,
+            cropToCutline=False,
+            dstNodata=dst_nodata,
+            resampleAlg=resample,
+            multithread=True,
             creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
         )
     finally:
@@ -129,23 +169,39 @@ def nc_to_tif(nc_path: Path, var: str, out_tif: Path, crs: str) -> Path:
     drv = gdal.GetDriverByName("GTiff")
     o = drv.Create(str(out_tif), nx, ny, 1, gdal.GDT_Float64)
     o.SetGeoTransform((x[0] - dx / 2.0, dx, 0.0, y[0] - dy / 2.0, 0.0, dy))
-    srs = osr.SpatialReference(); srs.SetFromUserInput(crs)
+    srs = osr.SpatialReference()
+    srs.SetFromUserInput(crs)
     o.SetProjection(srs.ExportToWkt())
     band = o.GetRasterBand(1)
     band.SetNoDataValue(float(NODATA))
     band.WriteArray(arr)
-    o.FlushCache(); o = None
+    o.FlushCache()
+    o = None
     return Path(out_tif)
 
 
-def prepare_field_on_dem_grid(nc_path: Path, var: str, domain_file: Path, dst_crs: str,
-                              dem_grid: Dict, out_tif: Path, resample: str = "near") -> Path:
+def prepare_field_on_dem_grid(
+    nc_path: Path,
+    var: str,
+    domain_file: Path,
+    dst_crs: str,
+    dem_grid: Dict,
+    out_tif: Path,
+    resample: str = "near",
+) -> Path:
     """Rasterize an mHM morphology field and warp it onto the exact DEM grid."""
     tmp = Path(f"{out_tif}.src.tif")
     nc_to_tif(nc_path, var, tmp, dst_crs)
     try:
-        warp_to_dem_grid(tmp, domain_file, dst_crs, dem_grid, out_tif,
-                         resample=resample, dst_nodata=NODATA)
+        warp_to_dem_grid(
+            tmp,
+            domain_file,
+            dst_crs,
+            dem_grid,
+            out_tif,
+            resample=resample,
+            dst_nodata=NODATA,
+        )
     finally:
         if tmp.exists():
             os.unlink(tmp)
@@ -171,16 +227,22 @@ def pixel_area_m2(tif: Path) -> float:
     return abs(gt[1]) * m_per_deg_lon * abs(gt[5]) * m_per_deg_lat
 
 
-def rasterize_waterbodies_to_dem_grid(vector_path: Path, dem_grid: Dict, out_tif: Path,
-                                      all_touched: bool = True) -> Path:
+def rasterize_waterbodies_to_dem_grid(
+    vector_path: Path, dem_grid: Dict, out_tif: Path, all_touched: bool = True
+) -> Path:
     """Burn waterbody polygons onto the exact DEM grid -> uint8 mask (1 = water)."""
     cs = dem_grid["cellsize"]
     ncols, nrows = dem_grid["ncols"], dem_grid["nrows"]
     xmin, ymax = dem_grid["x0"], dem_grid["y0"]
     xmax, ymin = xmin + ncols * cs, ymax - nrows * cs
     tif = gdal.GetDriverByName("GTiff").Create(
-        str(out_tif), ncols, nrows, 1, gdal.GDT_Byte,
-        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+        str(out_tif),
+        ncols,
+        nrows,
+        1,
+        gdal.GDT_Byte,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
+    )
     tif.SetGeoTransform((xmin, cs, 0.0, ymax, 0.0, -cs))
     tif.SetProjection(gdal.Open(str(dem_grid["tif"])).GetProjection())
     tif.GetRasterBand(1).Fill(0)
@@ -194,8 +256,9 @@ def rasterize_waterbodies_to_dem_grid(vector_path: Path, dem_grid: Dict, out_tif
     return Path(out_tif)
 
 
-def build_waterbody_depth(dem_grid: Dict, wb_mask_tif: Path, out_tif: Path,
-                          max_h: float, base_h: float) -> Dict:
+def build_waterbody_depth(
+    dem_grid: Dict, wb_mask_tif: Path, out_tif: Path, max_h: float, base_h: float
+) -> Dict:
     """Fill each waterbody to its rim/DEM level and write an initial-depth GeoTIFF.
 
     Connected waterbody cells form one pool; its water-surface level is the lowest
@@ -231,9 +294,13 @@ def build_waterbody_depth(dem_grid: Dict, wb_mask_tif: Path, out_tif: Path,
             sub_valid = valid[r0:r1, c0:c1]
             pool = labels[r0:r1, c0:c1] == lbl
             rim = ndimage.binary_dilation(pool, structure=structure) & ~pool & sub_valid
-            level = float(sub_dem[rim].min()) if rim.any() else float(sub_dem[pool].max())
+            level = (
+                float(sub_dem[rim].min()) if rim.any() else float(sub_dem[pool].max())
+            )
             d = np.clip(level - sub_dem, 0.0, max_h)
-            d[pool] = np.maximum(d[pool], base_h)  # guarantee every mapped water cell is wet
+            d[pool] = np.maximum(
+                d[pool], base_h
+            )  # guarantee every mapped water cell is wet
             d[~pool] = 0.0
             depth[r0:r1, c0:c1] = np.maximum(depth[r0:r1, c0:c1], d)
             n_pools += 1
@@ -241,17 +308,25 @@ def build_waterbody_depth(dem_grid: Dict, wb_mask_tif: Path, out_tif: Path,
 
     cs = dem_grid["cellsize"]
     tif = gdal.GetDriverByName("GTiff").Create(
-        str(out_tif), dem_grid["ncols"], dem_grid["nrows"], 1, gdal.GDT_Float32,
-        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+        str(out_tif),
+        dem_grid["ncols"],
+        dem_grid["nrows"],
+        1,
+        gdal.GDT_Float32,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
+    )
     tif.SetGeoTransform((dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs))
     tif.SetProjection(prj)
     tif.GetRasterBand(1).SetNoDataValue(0.0)
     tif.GetRasterBand(1).WriteArray(depth.astype(np.float32))
     tif.FlushCache()
     tif = None
-    return {"tif": Path(out_tif), "n_pools": n_pools, "n_cells": n_cells,
-            "max_depth_m": float(depth.max()) if n_cells else 0.0}
-
+    return {
+        "tif": Path(out_tif),
+        "n_pools": n_pools,
+        "n_cells": n_cells,
+        "max_depth_m": float(depth.max()) if n_cells else 0.0,
+    }
 
 
 def build_zones(runoff: Dict) -> Tuple[np.ndarray, np.ndarray, int]:

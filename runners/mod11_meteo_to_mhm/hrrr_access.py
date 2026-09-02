@@ -24,7 +24,7 @@ VARS = [
     "downward_long_wave_radiation_flux_surface",
     "downward_short_wave_radiation_flux_surface",
 ]
-VALID_INIT_HOURS = (0, 6, 12, 18)   # only these carry the full 48-h forecast
+VALID_INIT_HOURS = (0, 6, 12, 18)  # only these carry the full 48-h forecast
 
 
 def _has_datetime_coord(ds: xr.Dataset, name: str) -> bool:
@@ -95,21 +95,21 @@ def open_hrrr(repo_name: str, ref: str = "main") -> xr.Dataset:
         reproducible production runs.
     """
 
-    client  = Client()
-    repo    = client.get_repo(repo_name)
+    client = Client()
+    repo = client.get_repo(repo_name)
     session = repo.readonly_session(branch=ref)
-    store   = session.store
+    store = session.store
 
     # Probe with zarr first so we surface any v3 metadata issues clearly and
     # can log the group hierarchy before xarray reads it.
     root = zarr.open_group(store, zarr_format=3, mode="r")
-    log.info("Opened %s @ %s; top-level arrays: %s",
-             repo_name, ref, list(root.array_keys()))
+    log.info(
+        "Opened %s @ %s; top-level arrays: %s", repo_name, ref, list(root.array_keys())
+    )
     log.info("Top-level groups: %s", list(root.group_keys()))
 
     ds = xr.open_zarr(store, zarr_format=3, consolidated=False)
-    log.info("Dataset dims: %s | vars: %s",
-             dict(ds.sizes), list(ds.data_vars))
+    log.info("Dataset dims: %s | vars: %s", dict(ds.sizes), list(ds.data_vars))
 
     # Restrict to the meteo variables we actually need
     missing = [v for v in VARS if v not in ds.data_vars]
@@ -140,9 +140,9 @@ def resolve_init_time(ds: xr.Dataset, requested: str) -> pd.Timestamp:
     # Forecast-style data: prefer synoptic 6-hour init cycles.
     if "lead_time" in ds.coords or "lead_time" in ds.dims:
         now = pd.Timestamp.utcnow().tz_localize(None)
-        candidate = now.floor("6h")   # snap to 6-hour cadence
+        candidate = now.floor("6h")  # snap to 6-hour cadence
         # Walk back until we find one the dataset actually has (handles ingest lag).
-        for _ in range(8):            # up to 48 h back
+        for _ in range(8):  # up to 48 h back
             if candidate in available and candidate.hour in VALID_INIT_HOURS:
                 return candidate
             candidate -= pd.Timedelta("6h")
@@ -152,9 +152,9 @@ def resolve_init_time(ds: xr.Dataset, requested: str) -> pd.Timestamp:
     return pd.Timestamp(available.max())
 
 
-def select_window(ds: xr.Dataset,
-                  init_time: pd.Timestamp,
-                  forecast_hours: int) -> xr.Dataset:
+def select_window(
+    ds: xr.Dataset, init_time: pd.Timestamp, forecast_hours: int
+) -> xr.Dataset:
     """Slice one init/time stamp and optionally limit lead_time to 0..N hours."""
     init_coord = _find_init_coord(ds)
     ds_init = ds.sel({init_coord: init_time})
@@ -168,7 +168,6 @@ def select_window(ds: xr.Dataset,
     lead_index = ds_init.indexes.get("lead_time")
     # Forecast hours must be 1..48 for the HRRR Forecast subscription
     if 1 <= forecast_hours <= 48:
-
         if isinstance(lead_index, pd.TimedeltaIndex):
             lead_start = pd.to_timedelta(0, unit="s")
             lead_stop = pd.to_timedelta(forecast_hours, unit="h")
@@ -180,4 +179,3 @@ def select_window(ds: xr.Dataset,
     else:
         # Historical Reanalysis from 2000 to 2024
         return ds_init
-    

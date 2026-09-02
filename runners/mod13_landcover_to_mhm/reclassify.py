@@ -37,7 +37,8 @@ def to_mhm_classes(
     if unmapped.size > 0:
         log.warning(
             "Unmapped GHL codes present in scene: %s (set to NoData=%d)",
-            unmapped.tolist(), nodata_mhm,
+            unmapped.tolist(),
+            nodata_mhm,
         )
 
     return out
@@ -47,10 +48,12 @@ def log_class_stats(grid: np.ndarray, nodata: int, year: int) -> None:
     """Log per-class pixel counts and percentages."""
     total = grid.size
     valid = int((grid != nodata).sum())
-    log.info("[%s] Grid: %d cells (%d valid, %d NoData)",
-             year, total, valid, total - valid)
+    log.info(
+        "[%s] Grid: %d cells (%d valid, %d NoData)", year, total, valid, total - valid
+    )
     for code, name in MHM_CLASS_NAMES.items():
         n = int((grid == code).sum())
         pct = (n / valid * 100.0) if valid else 0.0
-        log.info("[%s]   class %d (%-10s): %8d cells (%5.1f%%)",
-                 year, code, name, n, pct)
+        log.info(
+            "[%s]   class %d (%-10s): %8d cells (%5.1f%%)", year, code, name, n, pct
+        )

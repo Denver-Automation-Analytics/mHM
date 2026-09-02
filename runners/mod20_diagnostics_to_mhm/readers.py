@@ -30,9 +30,17 @@ from config import DOMAIN_FILE, EVAL_START_DATE, END_DATE, OUTPUT_CRS
 FLUX_VARS = ["aET", "PET", "Q", "QB", "recharge", "preEffect"]
 # Instantaneous storage states summed for the water-balance change term ΔS.
 STORAGE_VARS = [
-    "interception", "snowpack",
-    "SWC_L01", "SWC_L02", "SWC_L03", "SWC_L04", "SWC_L05", "SWC_L06",
-    "sealedSTW", "unsatSTW", "satSTW",
+    "interception",
+    "snowpack",
+    "SWC_L01",
+    "SWC_L02",
+    "SWC_L03",
+    "SWC_L04",
+    "SWC_L05",
+    "SWC_L06",
+    "sealedSTW",
+    "unsatSTW",
+    "satSTW",
 ]
 
 
@@ -66,8 +74,9 @@ def resolve_window(flux_nc: Path, spinup_years: int = 1):
 def _mask_da(ds: xr.Dataset, ydim: str, xdim: str) -> xr.DataArray:
     """Domain-cell boolean mask as a DataArray aligned to (ydim, xdim)."""
     mask = _domain_mask(ds[xdim].values, ds[ydim].values)
-    return xr.DataArray(mask, dims=(ydim, xdim),
-                        coords={ydim: ds[ydim], xdim: ds[xdim]})
+    return xr.DataArray(
+        mask, dims=(ydim, xdim), coords={ydim: ds[ydim], xdim: ds[xdim]}
+    )
 
 
 def _reduce(da: xr.DataArray, mask_da: xr.DataArray, ydim: str, xdim: str):
@@ -89,7 +98,8 @@ def read_fluxes(flux_nc: Path, window=None) -> Dict:
     """Read mHM flux/state file, restricted to *window* (start, end) dates."""
     start, end = window if window is not None else (EVAL_START_DATE, END_DATE)
     ds = xr.open_dataset(flux_nc, decode_times=True, chunks={"time": 365}).sel(
-        time=slice(start, end))
+        time=slice(start, end)
+    )
     if ds.sizes.get("time", 0) == 0:
         raise ValueError(f"{flux_nc} has no time steps in {start}..{end}.")
     ydim, xdim = "northing", "easting"
@@ -102,7 +112,8 @@ def read_fluxes(flux_nc: Path, window=None) -> Dict:
         if var not in ds:
             raise KeyError(
                 f"Expected flux variable {var!r} missing from {flux_nc}. "
-                "Enable the matching outputFlxState in mhm_outputs.nml.")
+                "Enable the matching outputFlxState in mhm_outputs.nml."
+            )
         s, tot, fld = _reduce(ds[var], mask_da, ydim, xdim)
         series[var], totals[var], fields[var] = s, tot, fld
 
@@ -145,7 +156,8 @@ def read_inputs(pre_nc: Path, pet_nc: Path, window=None) -> Dict:
     out: Dict = {"totals": {}, "series": {}, "fields": {}}
     for key, path, var in (("pre", pre_nc, "pre"), ("pet", pet_nc, "pet")):
         ds = xr.open_dataset(path, decode_times=True, chunks={"time": 730}).sel(
-            time=slice(start, end))
+            time=slice(start, end)
+        )
         if ds.sizes.get("time", 0) == 0:
             raise ValueError(f"{path} has no time steps in {start}..{end}.")
         mask_da = _mask_da(ds, "y", "x")
@@ -173,7 +185,8 @@ TERRAIN_VARS = ["dem", "slope", "aspect"]
 RAIL_TOL = 0.02
 # mhm_parameter.nml / FinalParam.nml line: name = lower, upper, value, flag, flag
 _PARAM_LINE = re.compile(
-    r"^\s*([A-Za-z_0-9]+)\s*=\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)")
+    r"^\s*([A-Za-z_0-9]+)\s*=\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)"
+)
 
 
 def read_parameters(param_nml: Path) -> List[Dict]:
@@ -189,13 +202,27 @@ def read_parameters(param_nml: Path) -> List[Dict]:
         m = _PARAM_LINE.match(line)
         if not m:
             continue
-        name, lo, hi, val = m.group(1), float(m.group(2)), float(m.group(3)), float(m.group(4))
+        name, lo, hi, val = (
+            m.group(1),
+            float(m.group(2)),
+            float(m.group(3)),
+            float(m.group(4)),
+        )
         rng = hi - lo
         fixed = rng <= 0.0
         pos = 0.5 if fixed else (val - lo) / rng
         railed = (not fixed) and (pos <= RAIL_TOL or pos >= 1.0 - RAIL_TOL)
-        params.append({"name": name, "lower": lo, "upper": hi, "value": val,
-                       "pos": pos, "fixed": fixed, "railed": railed})
+        params.append(
+            {
+                "name": name,
+                "lower": lo,
+                "upper": hi,
+                "value": val,
+                "pos": pos,
+                "fixed": fixed,
+                "railed": railed,
+            }
+        )
     if not params:
         raise ValueError(f"No parameter lines parsed from {param_nml}.")
     return params
@@ -221,17 +248,23 @@ def read_discharge(discharge_nc: Path, gauge_dir: Path, window=None) -> Dict:
         if vsim not in ds:
             continue
         qsim = np.asarray(ds[vsim].values, dtype=float)
-        qobs = np.asarray(ds[vobs].values, dtype=float) if vobs in ds else np.full_like(qsim, np.nan)
+        qobs = (
+            np.asarray(ds[vobs].values, dtype=float)
+            if vobs in ds
+            else np.full_like(qsim, np.nan)
+        )
         qobs[qobs <= -9990.0] = np.nan
         qsim[qsim <= -9990.0] = np.nan
-        gauges.append({
-            "local_id": int(lid),
-            "site_no": str(meta.at[lid, "site_no"]),
-            "name": str(meta.at[lid, "name"]),
-            "time": time,
-            "qsim": qsim,
-            "qobs": qobs,
-        })
+        gauges.append(
+            {
+                "local_id": int(lid),
+                "site_no": str(meta.at[lid, "site_no"]),
+                "name": str(meta.at[lid, "name"]),
+                "time": time,
+                "qsim": qsim,
+                "qobs": qobs,
+            }
+        )
     if not gauges:
         raise ValueError(f"No Qsim_* variables found in {discharge_nc}.")
     return {"gauges": gauges, "time": time}
@@ -245,13 +278,22 @@ def _read_gauge_obs(gauge_txt: Path, time_index: pd.DatetimeIndex) -> np.ndarray
     for ln in gauge_txt.read_text().splitlines():
         f = ln.split()
         if len(f) == 6 and f[0].isdigit() and len(f[0]) == 4:
-            recs[pd.Timestamp(int(f[0]), int(f[1]), int(f[2]), int(f[3]), int(f[4]))] = float(f[5])
-    vals = pd.Series(recs).sort_index().reindex(time_index).to_numpy(dtype=float, copy=True)
+            recs[
+                pd.Timestamp(int(f[0]), int(f[1]), int(f[2]), int(f[3]), int(f[4]))
+            ] = float(f[5])
+    vals = (
+        pd.Series(recs)
+        .sort_index()
+        .reindex(time_index)
+        .to_numpy(dtype=float, copy=True)
+    )
     vals[vals <= -9990.0] = np.nan
     return vals
 
 
-def read_discharge_from_qrouted(mrm_flux_nc: Path, gauge_dir: Path, window=None) -> Dict:
+def read_discharge_from_qrouted(
+    mrm_flux_nc: Path, gauge_dir: Path, window=None
+) -> Dict:
     """Fallback hydrograph from the mRM routed-flow grid (Qrouted) [m3 s-1].
 
     Used when mRM's discharge.nc/subdaily_discharge.nc are missing or corrupt
@@ -281,17 +323,21 @@ def read_discharge_from_qrouted(mrm_flux_nc: Path, gauge_dir: Path, window=None)
         ri = int(np.argmin(np.abs(north - gy)))
         r0, r1 = max(0, ri - 2), min(len(north), ri + 3)
         c0, c1 = max(0, ci - 2), min(len(east), ci + 3)
-        lr, lc = np.unravel_index(int(np.nanargmax(qmean[r0:r1, c0:c1])), (r1 - r0, c1 - c0))
+        lr, lc = np.unravel_index(
+            int(np.nanargmax(qmean[r0:r1, c0:c1])), (r1 - r0, c1 - c0)
+        )
         qsim = np.asarray(q.isel(northing=r0 + lr, easting=c0 + lc).values, dtype=float)
         qobs = _read_gauge_obs(gauge_dir / f"{int(lid)}.txt", time)
-        gauges.append({
-            "local_id": int(lid),
-            "site_no": str(meta.at[lid, "site_no"]),
-            "name": str(meta.at[lid, "name"]),
-            "time": time,
-            "qsim": qsim,
-            "qobs": qobs,
-        })
+        gauges.append(
+            {
+                "local_id": int(lid),
+                "site_no": str(meta.at[lid, "site_no"]),
+                "name": str(meta.at[lid, "name"]),
+                "time": time,
+                "qsim": qsim,
+                "qobs": qobs,
+            }
+        )
     if not gauges:
         raise ValueError(f"No gauges in id_map.csv for {mrm_flux_nc} fallback.")
     return {"gauges": gauges, "time": time}
@@ -314,5 +360,7 @@ def read_terrain(morph_dir: Path) -> Dict:
         out.setdefault("x", x)
         out.setdefault("y", y)
     if not out["fields"]:
-        raise FileNotFoundError(f"No terrain fields (dem/slope/aspect) under {morph_dir}.")
+        raise FileNotFoundError(
+            f"No terrain fields (dem/slope/aspect) under {morph_dir}."
+        )
     return out

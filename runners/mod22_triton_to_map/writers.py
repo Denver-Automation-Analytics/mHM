@@ -5,6 +5,7 @@ time and emits the pixel-maximum GeoTIFF once the stream has been reduced. Both
 carry the grid geometry and CRS taken from the source TRITON ``.vrt`` (no
 reprojection); missing/masked cells use the shared NODATA fill value.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,17 +20,18 @@ gdal.UseExceptions()
 
 # Per-variable CF metadata for the netCDF data variable.
 VAR_META = {
-    "H":  {"units": "m",   "long_name": "water depth"},
-    "MH": {"units": "m",   "long_name": "maximum water depth (running envelope)"},
+    "H": {"units": "m", "long_name": "water depth"},
+    "MH": {"units": "m", "long_name": "maximum water depth (running envelope)"},
     "QX": {"units": "m2 s-1", "long_name": "unit discharge, x-direction"},
     "QY": {"units": "m2 s-1", "long_name": "unit discharge, y-direction"},
-    "V":  {"units": "m s-1", "long_name": "depth-averaged velocity magnitude"},
+    "V": {"units": "m s-1", "long_name": "depth-averaged velocity magnitude"},
 }
 _TIME_UNITS = "hours since 1970-01-01 00:00:00"
 
 
-def open_cube(path: Path, var: str, grid: Dict, times: pd.DatetimeIndex,
-              nodata: float) -> Tuple[netCDF4.Dataset, netCDF4.Variable]:
+def open_cube(
+    path: Path, var: str, grid: Dict, times: pd.DatetimeIndex, nodata: float
+) -> Tuple[netCDF4.Dataset, netCDF4.Variable]:
     """Create the netCDF cube and return the open dataset + data variable handle.
 
     Time slices are written incrementally by the caller via ``data[t] = slice``.
@@ -63,9 +65,15 @@ def open_cube(path: Path, var: str, grid: Dict, times: pd.DatetimeIndex,
         crs.epsg_code = grid["epsg"]
 
     chunk = (1, min(ny, 512), min(nx, 512))
-    data = ds.createVariable(var, "f4", ("time", "y", "x"),
-                             zlib=True, complevel=4, chunksizes=chunk,
-                             fill_value=np.float32(nodata))
+    data = ds.createVariable(
+        var,
+        "f4",
+        ("time", "y", "x"),
+        zlib=True,
+        complevel=4,
+        chunksizes=chunk,
+        fill_value=np.float32(nodata),
+    )
     meta = VAR_META.get(var, {})
     data.units = meta.get("units", "")
     data.long_name = meta.get("long_name", var)
@@ -87,8 +95,9 @@ def write_max_tiff(path: Path, arr: np.ndarray, grid: Dict, nodata: float) -> No
         except FileNotFoundError:
             pass
     drv = gdal.GetDriverByName("GTiff")
-    ds = drv.Create(str(path), nx, ny, 1, gdal.GDT_Float32,
-                    options=["COMPRESS=LZW", "TILED=YES"])
+    ds = drv.Create(
+        str(path), nx, ny, 1, gdal.GDT_Float32, options=["COMPRESS=LZW", "TILED=YES"]
+    )
     ds.SetGeoTransform(grid["gt"])
     if grid.get("wkt"):
         ds.SetProjection(grid["wkt"])

@@ -96,13 +96,19 @@ FEATURE_HOST = "https://services.arcgis.com/hoKRg7d6zCP8hwp2/ArcGIS/rest/service
 
 KARST_SERVICES = [
     # class label            # queryable FeatureServer URL
-    ("Carbonate_Karst",      f"{FEATURE_HOST}/Carbonate_Karst/FeatureServer"),
-    ("Evaporite_Karst",      f"{FEATURE_HOST}/Evaporite_Karst/FeatureServer"),
-    ("Sandstone_Karst",      f"{FEATURE_HOST}/Sandstone_Karst/FeatureServer"),
-    ("Piping_Pseudokarst",   f"{FEATURE_HOST}/Piping_Pseudokarst/FeatureServer"),
+    ("Carbonate_Karst", f"{FEATURE_HOST}/Carbonate_Karst/FeatureServer"),
+    ("Evaporite_Karst", f"{FEATURE_HOST}/Evaporite_Karst/FeatureServer"),
+    ("Sandstone_Karst", f"{FEATURE_HOST}/Sandstone_Karst/FeatureServer"),
+    ("Piping_Pseudokarst", f"{FEATURE_HOST}/Piping_Pseudokarst/FeatureServer"),
     ("Volcanic_Pseudokarst", f"{FEATURE_HOST}/Volcanic_Pseudokarst/FeatureServer"),
-    ("Gypsum_Extent",        f"{FEATURE_HOST}/Gypsum/FeatureServer"),          # tile name: Gypsum_Karst
-    ("Evaporite_Basins",     f"{FEATURE_HOST}/evaporitebasins/FeatureServer"), # tile name: Evaporite_Basins
+    (
+        "Gypsum_Extent",
+        f"{FEATURE_HOST}/Gypsum/FeatureServer",
+    ),  # tile name: Gypsum_Karst
+    (
+        "Evaporite_Basins",
+        f"{FEATURE_HOST}/evaporitebasins/FeatureServer",
+    ),  # tile name: Evaporite_Basins
 ]
 
 # Known tile-name -> FeatureServer-name overrides for the converter below.
@@ -111,8 +117,8 @@ _TILE_NAME_OVERRIDES = {
     "evaporite_basins": "evaporitebasins",
 }
 
-QUERY_SR = 4326    # SR of the envelope we send (boundary reprojected to this)
-OUTPUT_SR = 4326   # SR requested from the server for returned geometry
+QUERY_SR = 4326  # SR of the envelope we send (boundary reprojected to this)
+OUTPUT_SR = 4326  # SR requested from the server for returned geometry
 FALLBACK_PAGE_SIZE = 1000
 
 
@@ -140,7 +146,10 @@ def tile_to_featureserver(url: str) -> str:
 def _build_session(retries: int = 4, backoff: float = 0.6) -> requests.Session:
     session = requests.Session()
     retry = Retry(
-        total=retries, connect=retries, read=retries, status=retries,
+        total=retries,
+        connect=retries,
+        read=retries,
+        status=retries,
         backoff_factor=backoff,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=frozenset(["GET", "POST"]),
@@ -177,14 +186,16 @@ def _discover_layers(session: requests.Session, service_url: str) -> list[dict]:
     # Single-layer endpoint?
     if re.search(r"/\d+$", service_url):
         meta = _get_json(session, service_url, {"f": "json"})
-        return [{
-            "id": meta.get("id"),
-            "url": service_url,
-            "name": meta.get("name", "layer"),
-            "geometryType": meta.get("geometryType"),
-            "maxRecordCount": int(meta.get("maxRecordCount", FALLBACK_PAGE_SIZE))
-                              or FALLBACK_PAGE_SIZE,
-        }]
+        return [
+            {
+                "id": meta.get("id"),
+                "url": service_url,
+                "name": meta.get("name", "layer"),
+                "geometryType": meta.get("geometryType"),
+                "maxRecordCount": int(meta.get("maxRecordCount", FALLBACK_PAGE_SIZE))
+                or FALLBACK_PAGE_SIZE,
+            }
+        ]
 
     # FeatureServer root -> enumerate layers.
     root = _get_json(session, service_url, {"f": "json"})
@@ -195,14 +206,16 @@ def _discover_layers(session: requests.Session, service_url: str) -> list[dict]:
         if gtype is None:
             continue
         lid = lyr["id"]
-        layers.append({
-            "id": lid,
-            "url": f"{service_url}/{lid}",
-            "name": lyr.get("name", f"layer_{lid}"),
-            "geometryType": gtype,
-            # per-layer maxRecordCount may not be in the root; fetch lazily later
-            "maxRecordCount": int(lyr.get("maxRecordCount", 0)) or None,
-        })
+        layers.append(
+            {
+                "id": lid,
+                "url": f"{service_url}/{lid}",
+                "name": lyr.get("name", f"layer_{lid}"),
+                "geometryType": gtype,
+                # per-layer maxRecordCount may not be in the root; fetch lazily later
+                "maxRecordCount": int(lyr.get("maxRecordCount", 0)) or None,
+            }
+        )
     return layers
 
 
@@ -220,8 +233,10 @@ def _boundary_envelope(boundary_gdf: gpd.GeoDataFrame, sr: int) -> dict:
     projected = boundary_gdf.to_crs(epsg=sr)
     minx, miny, maxx, maxy = projected.total_bounds
     return {
-        "xmin": float(minx), "ymin": float(miny),
-        "xmax": float(maxx), "ymax": float(maxy),
+        "xmin": float(minx),
+        "ymin": float(miny),
+        "xmax": float(maxx),
+        "ymax": float(maxy),
         "spatialReference": {"wkid": sr},
     }
 
@@ -244,7 +259,9 @@ def _query_page(session, layer_url, envelope, query_sr, out_sr, offset, page_siz
     resp.raise_for_status()
     payload = resp.json()
     if "error" in payload:
-        raise RuntimeError(f"Query error ({layer_url}, offset {offset}): {payload['error']}")
+        raise RuntimeError(
+            f"Query error ({layer_url}, offset {offset}): {payload['error']}"
+        )
     return payload
 
 
@@ -263,12 +280,17 @@ def _fetch_layer(session, layer, envelope, query_sr, out_sr) -> gpd.GeoDataFrame
 
     frames, offset = [], 0
     while True:
-        page = _query_page(session, layer_url, envelope, query_sr, out_sr, offset, page_size)
+        page = _query_page(
+            session, layer_url, envelope, query_sr, out_sr, offset, page_size
+        )
         features = page.get("features", [])
         if features:
-            frames.append(gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_sr}"))
-        exceeded = page.get("exceededTransferLimit") or \
-            page.get("properties", {}).get("exceededTransferLimit")
+            frames.append(
+                gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_sr}")
+            )
+        exceeded = page.get("exceededTransferLimit") or page.get("properties", {}).get(
+            "exceededTransferLimit"
+        )
         if not exceeded or not features:
             break
         offset += page_size
@@ -319,7 +341,9 @@ def _write_layers(results: dict[str, gpd.GeoDataFrame], output_path) -> list[Pat
         return written
 
     driver_map = {
-        ".shp": "ESRI Shapefile", ".geojson": "GeoJSON", ".json": "GeoJSON",
+        ".shp": "ESRI Shapefile",
+        ".geojson": "GeoJSON",
+        ".json": "GeoJSON",
         ".fgb": "FlatGeobuf",
     }
     for name, gdf in non_empty.items():
@@ -432,12 +456,16 @@ def acquire_karst(
     written = _write_layers(results, output_path)
     total = sum(len(g) for g in results.values())
     n_nonempty = sum(1 for g in results.values() if not g.empty)
-    print(f"\nDone. {total} total feature(s) across {n_nonempty} non-empty "
-          f"layer(s) from {len(services) - len(skipped)} service(s).")
+    print(
+        f"\nDone. {total} total feature(s) across {n_nonempty} non-empty "
+        f"layer(s) from {len(services) - len(skipped)} service(s)."
+    )
     if skipped:
         print(f"Skipped (unresolved) services: {', '.join(skipped)}")
-        print("  -> If these are only published as tiled MapServer layers, get "
-              "the vector data from https://pubs.usgs.gov/of/2014/1156/")
+        print(
+            "  -> If these are only published as tiled MapServer layers, get "
+            "the vector data from https://pubs.usgs.gov/of/2014/1156/"
+        )
     for p in written:
         print(f"  wrote -> {p.resolve()}")
     return results

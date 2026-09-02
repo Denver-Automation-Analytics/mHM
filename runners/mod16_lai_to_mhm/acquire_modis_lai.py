@@ -77,9 +77,9 @@ COLLECTION_ID = "modis-15A3H-061"
 LAI_ASSET = "Lai_500m"
 LAI_STD_ASSET = "LaiStdDev_500m"
 QC_ASSET = "FparLai_QC"
-LAI_SCALE = 0.1          # multiply DN by this to get m2/m2
-LAI_VALID_MAX = 100      # DN; >100 are fill/water/etc.
-NATIVE_SCALE_M = 500     # native pixel size in metres
+LAI_SCALE = 0.1  # multiply DN by this to get m2/m2
+LAI_VALID_MAX = 100  # DN; >100 are fill/water/etc.
+NATIVE_SCALE_M = 500  # native pixel size in metres
 # MODIS sinusoidal projection (native grid of the COGs).
 MODIS_SINU_WKT = (
     'PROJCS["MODIS Sinusoidal",'
@@ -128,7 +128,9 @@ def dissolve_boundary(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             "(e.g. gdf.set_crs('EPSG:4326'))."
         )
     gdf_ll = gdf.to_crs("EPSG:4326")
-    dissolved = gdf_ll.union_all() if hasattr(gdf_ll, "union_all") else gdf_ll.unary_union
+    dissolved = (
+        gdf_ll.union_all() if hasattr(gdf_ll, "union_all") else gdf_ll.unary_union
+    )
     return gpd.GeoDataFrame(geometry=[dissolved], crs="EPSG:4326")
 
 
@@ -193,7 +195,7 @@ def load_cube(
         bbox=bbox,
         chunks=chunks or {},
         groupby="time",
-        resampling="nearest",   # categorical QC must not be interpolated
+        resampling="nearest",  # categorical QC must not be interpolated
     )
     log.info(
         "Loaded cube: %d time steps, grid %s.",
@@ -224,7 +226,7 @@ def build_lai_snapshot(ds, reducer: str = "median", max_scf_qc: int = 1):
     lai_dn = ds[LAI_ASSET]
     qc = ds[QC_ASSET]
 
-    scf_qc = qc.astype("uint16") & 0b111          # bits 0-2
+    scf_qc = qc.astype("uint16") & 0b111  # bits 0-2
     quality_ok = scf_qc <= max_scf_qc
     range_ok = lai_dn <= LAI_VALID_MAX
     mask = quality_ok & range_ok
@@ -237,7 +239,8 @@ def build_lai_snapshot(ds, reducer: str = "median", max_scf_qc: int = 1):
 
     log.info(
         "Collapsing %d composites into one snapshot (reducer='%s').",
-        ds.sizes.get("time", 0), reducer,
+        ds.sizes.get("time", 0),
+        reducer,
     )
 
     snapshot = getattr(lai, reducer)(dim="time", skipna=True).rename("Lai")
@@ -275,7 +278,7 @@ def build_lai_monthly_climatology(ds, reducer: str = "median", max_scf_qc: int =
     lai_dn = ds[LAI_ASSET]
     qc = ds[QC_ASSET]
 
-    scf_qc = qc.astype("uint16") & 0b111          # bits 0-2
+    scf_qc = qc.astype("uint16") & 0b111  # bits 0-2
     quality_ok = scf_qc <= max_scf_qc
     range_ok = lai_dn <= LAI_VALID_MAX
     mask = quality_ok & range_ok
@@ -288,7 +291,8 @@ def build_lai_monthly_climatology(ds, reducer: str = "median", max_scf_qc: int =
 
     log.info(
         "Building 12-month climatology from %d composites (reducer='%s').",
-        ds.sizes.get("time", 0), reducer,
+        ds.sizes.get("time", 0),
+        reducer,
     )
 
     all_months = list(range(1, 13))
@@ -298,7 +302,8 @@ def build_lai_monthly_climatology(ds, reducer: str = "median", max_scf_qc: int =
         .rename("Lai")
     )
     n_obs = (
-        mask.groupby("time.month").sum(dim="time")
+        mask.groupby("time.month")
+        .sum(dim="time")
         .reindex(month=all_months, fill_value=0)
         .rename("n_obs")
         .astype("int16")
@@ -372,10 +377,13 @@ def acquire_lai_map(
     catalog = open_catalog()
     boundary_ll = dissolve_boundary(boundary)
     items = search_items(catalog, boundary_ll, start_date, end_date)
-    cube = load_cube(items, boundary_ll, scale_m=scale_m,
-                     output_crs=output_crs, chunks=chunks)
+    cube = load_cube(
+        items, boundary_ll, scale_m=scale_m, output_crs=output_crs, chunks=chunks
+    )
     if monthly:
-        snapshot = build_lai_monthly_climatology(cube, reducer=reducer, max_scf_qc=max_scf_qc)
+        snapshot = build_lai_monthly_climatology(
+            cube, reducer=reducer, max_scf_qc=max_scf_qc
+        )
     else:
         snapshot = build_lai_snapshot(cube, reducer=reducer, max_scf_qc=max_scf_qc)
     snapshot = clip_to_boundary(snapshot, boundary_ll)
@@ -386,8 +394,9 @@ def acquire_lai_map(
 
     if out_tif:
         if monthly:
-            log.warning("out_tif is not supported for monthly climatology; skipping GeoTIFF export.")
+            log.warning(
+                "out_tif is not supported for monthly climatology; skipping GeoTIFF export."
+            )
         else:
             export_geotiff(snapshot, out_tif)
     return snapshot
-

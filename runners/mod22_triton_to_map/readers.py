@@ -5,6 +5,7 @@ and CRS straight from the ``.vrt`` (which merges the partition tiles TRITON writ
 in parallel runs), parses the output cadence from the run's ``.cfg``, and streams
 one timestep slice at a time so the full space-time cube is never held in memory.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,6 +62,7 @@ def read_grid(vrt: Path) -> Dict:
     epsg = None
     if wkt:
         from osgeo import osr
+
         srs = osr.SpatialReference()
         srs.ImportFromWkt(wkt)
         code = srs.GetAuthorityCode(None)
@@ -93,8 +95,9 @@ def parse_print_interval(cfg: Path) -> int:
 def build_time_axis(n_steps: int, start_date: str, interval_s: int) -> pd.DatetimeIndex:
     """Datetimes for each output step: index-based, step k (1-based) at k*interval."""
     base = pd.Timestamp(start_date)
-    return pd.DatetimeIndex([base + pd.Timedelta(seconds=(k + 1) * interval_s)
-                             for k in range(n_steps)])
+    return pd.DatetimeIndex(
+        [base + pd.Timedelta(seconds=(k + 1) * interval_s) for k in range(n_steps)]
+    )
 
 
 def build_watershed_mask(watershed_file: Path, grid: Dict) -> np.ndarray:
@@ -112,7 +115,9 @@ def build_watershed_mask(watershed_file: Path, grid: Dict) -> np.ndarray:
         tmp_path = tmp.name
     try:
         dom.to_file(tmp_path, driver="GPKG")
-        mem = gdal.GetDriverByName("MEM").Create("", grid["nx"], grid["ny"], 1, gdal.GDT_Byte)
+        mem = gdal.GetDriverByName("MEM").Create(
+            "", grid["nx"], grid["ny"], 1, gdal.GDT_Byte
+        )
         mem.SetGeoTransform(grid["gt"])
         if grid.get("wkt"):
             mem.SetProjection(grid["wkt"])
@@ -132,9 +137,16 @@ def read_hillshade(dem_tif: Path, grid: Dict) -> np.ndarray:
     """
     hs = gdal.DEMProcessing("", str(dem_tif), "hillshade", format="MEM")
     ny, nx = grid["ny"], grid["nx"]
-    warped = gdal.Warp("", hs, format="MEM", width=nx, height=ny,
-                       outputBounds=_grid_bounds(grid),
-                       dstSRS=grid.get("wkt") or None, resampleAlg="bilinear")
+    warped = gdal.Warp(
+        "",
+        hs,
+        format="MEM",
+        width=nx,
+        height=ny,
+        outputBounds=_grid_bounds(grid),
+        dstSRS=grid.get("wkt") or None,
+        resampleAlg="bilinear",
+    )
     hs = None
     arr = warped.GetRasterBand(1).ReadAsArray().astype(np.float32)
     warped = None
@@ -177,4 +189,3 @@ def max_from_netcdf(nc_path: Path, var: str, nodata: float) -> np.ndarray:
     finally:
         ds.close()
     return mx
-

@@ -6,6 +6,7 @@ target CRS, clips to the domain, and writes a GeoPackage of waterbody polygons.
 
 Importable entry point used by the mod21 pipeline is ``acquire``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,9 +32,18 @@ FALLBACK_PAGE_SIZE = 1000
 
 # NHD FType (3-digit) -> class name (USGS NHD data dictionary). Used to filter classes.
 NHD_FTYPE = {
-    336: "CanalDitch", 343: "DamWeir", 361: "Playa", 378: "Ice Mass",
-    390: "LakePond", 403: "Inundation Area", 431: "Rapids", 436: "Reservoir",
-    455: "Spillway", 460: "StreamRiver", 466: "SwampMarsh", 493: "Estuary",
+    336: "CanalDitch",
+    343: "DamWeir",
+    361: "Playa",
+    378: "Ice Mass",
+    390: "LakePond",
+    403: "Inundation Area",
+    431: "Rapids",
+    436: "Reservoir",
+    455: "Spillway",
+    460: "StreamRiver",
+    466: "SwampMarsh",
+    493: "Estuary",
 }
 
 # NHD FCode (5-digit) -> description for LakePond; the stage text drives the LakePond filter.
@@ -85,24 +95,32 @@ def filter_features(gdf, exclude_ftypes=(), lakepond_stage=None):
     if tokens:
         text = (fname + " " + fdesc).str.lower()
         excl = text.apply(lambda s: any(tok in s for tok in tokens))
-        log.info("Excluding %d feature(s) by FType %s", int(excl.sum()), list(exclude_ftypes))
+        log.info(
+            "Excluding %d feature(s) by FType %s", int(excl.sum()), list(exclude_ftypes)
+        )
         keep &= ~excl
     if lakepond_stage:
         want = str(lakepond_stage).lower()
         is_lp = ftype == LAKEPOND_FTYPE
         lp_ok = fdesc.str.lower().str.contains(want, regex=False)
         drop_lp = is_lp & ~lp_ok
-        log.info("Dropping %d LakePond(s) without %r (kept %d normal-pool)",
-                 int(drop_lp.sum()), lakepond_stage, int((is_lp & lp_ok).sum()))
+        log.info(
+            "Dropping %d LakePond(s) without %r (kept %d normal-pool)",
+            int(drop_lp.sum()),
+            lakepond_stage,
+            int((is_lp & lp_ok).sum()),
+        )
         keep &= ~drop_lp
     return gdf[keep.to_numpy()].reset_index(drop=True)
-
 
 
 def _build_session(retries: int = 4, backoff: float = 0.6) -> requests.Session:
     session = requests.Session()
     retry = Retry(
-        total=retries, connect=retries, read=retries, status=retries,
+        total=retries,
+        connect=retries,
+        read=retries,
+        status=retries,
         backoff_factor=backoff,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=frozenset(["GET", "POST"]),
@@ -131,8 +149,10 @@ def _envelope(gdf: gpd.GeoDataFrame, sr: int) -> dict:
     """Bounding box of *gdf* reprojected to EPSG:*sr*, as an ArcGIS envelope."""
     minx, miny, maxx, maxy = gdf.to_crs(epsg=sr).total_bounds
     return {
-        "xmin": float(minx), "ymin": float(miny),
-        "xmax": float(maxx), "ymax": float(maxy),
+        "xmin": float(minx),
+        "ymin": float(miny),
+        "xmax": float(maxx),
+        "ymax": float(maxy),
         "spatialReference": {"wkid": sr},
     }
 
@@ -155,22 +175,35 @@ def _query_page(session, layer_url, envelope, query_sr, out_sr, offset, page_siz
     resp.raise_for_status()
     payload = resp.json()
     if "error" in payload:
-        raise RuntimeError(f"Query error ({layer_url}, offset {offset}): {payload['error']}")
+        raise RuntimeError(
+            f"Query error ({layer_url}, offset {offset}): {payload['error']}"
+        )
     return payload
 
 
-def _fetch_layer(session, layer_url, envelope, query_sr, out_sr, page_size) -> gpd.GeoDataFrame:
+def _fetch_layer(
+    session, layer_url, envelope, query_sr, out_sr, page_size
+) -> gpd.GeoDataFrame:
     """Paginate the layer and return every feature intersecting the envelope."""
     frames, offset = [], 0
     while True:
-        page = _query_page(session, layer_url, envelope, query_sr, out_sr, offset, page_size)
+        page = _query_page(
+            session, layer_url, envelope, query_sr, out_sr, offset, page_size
+        )
         features = page.get("features", [])
         if features:
-            frames.append(gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_sr}"))
-        exceeded = page.get("exceededTransferLimit") or \
-            page.get("properties", {}).get("exceededTransferLimit")
-        log.info("  fetched %d feature(s) at offset %d%s",
-                 len(features), offset, " (more pending)" if exceeded else "")
+            frames.append(
+                gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_sr}")
+            )
+        exceeded = page.get("exceededTransferLimit") or page.get("properties", {}).get(
+            "exceededTransferLimit"
+        )
+        log.info(
+            "  fetched %d feature(s) at offset %d%s",
+            len(features),
+            offset,
+            " (more pending)" if exceeded else "",
+        )
         if not exceeded or not features:
             break
         offset += page_size
@@ -180,9 +213,16 @@ def _fetch_layer(session, layer_url, envelope, query_sr, out_sr, page_size) -> g
     return gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=f"EPSG:{out_sr}")
 
 
-def acquire(geojson_path: Path, target_crs: str, out_path: Path, service_url: str,
-            layer_id: int, query_sr: int = 4326, exclude_ftypes=(),
-            lakepond_stage=None) -> Path:
+def acquire(
+    geojson_path: Path,
+    target_crs: str,
+    out_path: Path,
+    service_url: str,
+    layer_id: int,
+    query_sr: int = 4326,
+    exclude_ftypes=(),
+    lakepond_stage=None,
+) -> Path:
     """Acquire waterbody polygons for a domain and write them to *out_path* (GPKG).
 
     Features are requested in *target_crs* (via outSR), clipped to the domain
@@ -202,10 +242,21 @@ def acquire(geojson_path: Path, target_crs: str, out_path: Path, service_url: st
     layer_url = _layer_url(service_url, layer_id)
     try:
         meta = _get_json(session, layer_url, {"f": "json"})
-        page_size = int(meta.get("maxRecordCount", FALLBACK_PAGE_SIZE)) or FALLBACK_PAGE_SIZE
-        log.info("Layer %s: %r (maxRecordCount=%d)", layer_id, meta.get("name", "?"), page_size)
+        page_size = (
+            int(meta.get("maxRecordCount", FALLBACK_PAGE_SIZE)) or FALLBACK_PAGE_SIZE
+        )
+        log.info(
+            "Layer %s: %r (maxRecordCount=%d)",
+            layer_id,
+            meta.get("name", "?"),
+            page_size,
+        )
     except Exception as exc:  # noqa: BLE001 - discovery is best-effort
-        log.warning("Could not read layer metadata (%s); using page size %d.", exc, FALLBACK_PAGE_SIZE)
+        log.warning(
+            "Could not read layer metadata (%s); using page size %d.",
+            exc,
+            FALLBACK_PAGE_SIZE,
+        )
         page_size = FALLBACK_PAGE_SIZE
 
     envelope = _envelope(dom, query_sr)
@@ -232,19 +283,42 @@ def acquire(geojson_path: Path, target_crs: str, out_path: Path, service_url: st
 
 
 def main():
-    p = argparse.ArgumentParser(description="Acquire NHDPlus HR waterbodies for a domain.")
+    p = argparse.ArgumentParser(
+        description="Acquire NHDPlus HR waterbodies for a domain."
+    )
     p.add_argument("geojson", type=Path, help="Domain GeoJSON file.")
     p.add_argument("--crs", required=True, help="Target CRS, e.g. 'EPSG:5070'.")
     p.add_argument("--service-url", required=True, help="ESRI FeatureServer root URL.")
-    p.add_argument("--layer-id", type=int, default=1, help="Waterbody polygon layer id.")
-    p.add_argument("--out", type=Path, default=Path("./waterbodies.gpkg"), help="Output GeoPackage.")
-    p.add_argument("--exclude-ftypes", nargs="*", default=["SwampMarsh", "Wetland"],
-                   help="NHD FType names to drop.")
-    p.add_argument("--lakepond-stage", default="Stage = Normal Pool",
-                   help="Keep LakePonds only if their FCode description contains this text ('' disables).")
+    p.add_argument(
+        "--layer-id", type=int, default=1, help="Waterbody polygon layer id."
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=Path("./waterbodies.gpkg"),
+        help="Output GeoPackage.",
+    )
+    p.add_argument(
+        "--exclude-ftypes",
+        nargs="*",
+        default=["SwampMarsh", "Wetland"],
+        help="NHD FType names to drop.",
+    )
+    p.add_argument(
+        "--lakepond-stage",
+        default="Stage = Normal Pool",
+        help="Keep LakePonds only if their FCode description contains this text ('' disables).",
+    )
     args = p.parse_args()
-    acquire(args.geojson, args.crs, args.out, args.service_url, args.layer_id,
-            exclude_ftypes=args.exclude_ftypes, lakepond_stage=args.lakepond_stage or None)
+    acquire(
+        args.geojson,
+        args.crs,
+        args.out,
+        args.service_url,
+        args.layer_id,
+        exclude_ftypes=args.exclude_ftypes,
+        lakepond_stage=args.lakepond_stage or None,
+    )
 
 
 if __name__ == "__main__":

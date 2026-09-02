@@ -14,7 +14,9 @@ log = logging.getLogger(__name__)
 _ALLOWED_DATA_TYPES = {"daily", "continuous"}
 
 
-def _normalize_data_type(data_type: str | None = None, cadence: str | None = None) -> str:
+def _normalize_data_type(
+    data_type: str | None = None, cadence: str | None = None
+) -> str:
     """Normalize user input to one of {'daily', 'continuous'}.
 
     Backward compatibility:
@@ -61,7 +63,9 @@ def discover_gauges(
         site_type_code=site_type_code,
     )
     if sites_gdf is None or sites_gdf.empty:
-        return pd.DataFrame(columns=["site_no", "monitoring_location_name", "dec_lat_va", "dec_long_va"])
+        return pd.DataFrame(
+            columns=["site_no", "monitoring_location_name", "dec_lat_va", "dec_long_va"]
+        )
 
     # test.py-style geometry -> lon/lat extraction
     sites_gdf["lat"] = sites_gdf["geometry"].y
@@ -82,9 +86,15 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
     if "site_no" not in out.columns and "monitoring_location_id" in out.columns:
-        out["site_no"] = out["monitoring_location_id"].astype(str).str.replace(r"^USGS-", "", regex=True)
+        out["site_no"] = (
+            out["monitoring_location_id"]
+            .astype(str)
+            .str.replace(r"^USGS-", "", regex=True)
+        )
     elif "site_no" in out.columns:
-        out["site_no"] = out["site_no"].astype(str).str.replace(r"^USGS-", "", regex=True)
+        out["site_no"] = (
+            out["site_no"].astype(str).str.replace(r"^USGS-", "", regex=True)
+        )
 
     if "monitoring_location_name" not in out.columns and "name" in out.columns:
         out["monitoring_location_name"] = out["name"]
@@ -180,7 +190,9 @@ def fetch_watershed_data(
     if gauges.empty:
         return gauges, pd.DataFrame()
 
-    monitoring_ids: Iterable[str] = [f"USGS-{sid}" for sid in gauges["site_no"].astype(str)]
+    monitoring_ids: Iterable[str] = [
+        f"USGS-{sid}" for sid in gauges["site_no"].astype(str)
+    ]
     time_arg = f"{start}/{end}" if start and end else None
 
     if dtype == "daily":
@@ -204,15 +216,26 @@ def _standardize_series(df: pd.DataFrame | None, data_type: str) -> pd.DataFrame
     if df is None or df.empty:
         return pd.DataFrame(columns=["value", "approval_status"])
 
-    ts_col = next((c for c in ("time", "datetime", "dateTime") if c in df.columns), None)
+    ts_col = next(
+        (c for c in ("time", "datetime", "dateTime") if c in df.columns), None
+    )
     if ts_col is None:
         return pd.DataFrame(columns=["value", "approval_status"])
 
-    val_col = next((c for c in ("value", "00060_Mean", "00060") if c in df.columns), None)
+    val_col = next(
+        (c for c in ("value", "00060_Mean", "00060") if c in df.columns), None
+    )
     if val_col is None:
         return pd.DataFrame(columns=["value", "approval_status"])
 
-    qc_col = next((c for c in ("approval_status", "qualifiers", "00060_Mean_cd") if c in df.columns), None)
+    qc_col = next(
+        (
+            c
+            for c in ("approval_status", "qualifiers", "00060_Mean_cd")
+            if c in df.columns
+        ),
+        None,
+    )
 
     out = pd.DataFrame(
         {
@@ -224,15 +247,19 @@ def _standardize_series(df: pd.DataFrame | None, data_type: str) -> pd.DataFrame
 
     # Keep behavior compatible with previous pipeline contract.
     if data_type == "continuous":
-        out = out.resample("1h").agg({
-            "value": "mean",
-            "approval_status": lambda s: _dominant_status(s),
-        })
+        out = out.resample("1h").agg(
+            {
+                "value": "mean",
+                "approval_status": lambda s: _dominant_status(s),
+            }
+        )
     else:
-        out = out.resample("1D").agg({
-            "value": "mean",
-            "approval_status": lambda s: _dominant_status(s),
-        })
+        out = out.resample("1D").agg(
+            {
+                "value": "mean",
+                "approval_status": lambda s: _dominant_status(s),
+            }
+        )
     return out
 
 

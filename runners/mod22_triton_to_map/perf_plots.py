@@ -5,6 +5,7 @@ plot_timeseries   : per-step incremental compute/MPI-wait time, optionally next
                     to the domain wet-cell/volume series to spot correlation
                     between solver slowdowns and physical instability.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,11 +30,15 @@ def plot_load_balance(summary: pd.DataFrame, out_png: Path) -> None:
     ranks["Rank"] = ranks["Rank"].astype(int)
     ranks = ranks.sort_values("Rank")
 
-    fig, (ax_bar, ax_tbl) = plt.subplots(1, 2, figsize=(12, 4.5), gridspec_kw={"width_ratios": [1, 1.4]})
+    fig, (ax_bar, ax_tbl) = plt.subplots(
+        1, 2, figsize=(12, 4.5), gridspec_kw={"width_ratios": [1, 1.4]}
+    )
     bottom = np.zeros(len(ranks))
     for col, color in zip(DELTA_COLS, _COLORS):
         vals = ranks[col].to_numpy(dtype=float)
-        ax_bar.bar(ranks["Rank"].astype(str), vals, bottom=bottom, label=col, color=color)
+        ax_bar.bar(
+            ranks["Rank"].astype(str), vals, bottom=bottom, label=col, color=color
+        )
         bottom += vals
     ax_bar.set_xlabel("rank")
     ax_bar.set_ylabel("wall time [s]")
@@ -54,9 +59,14 @@ def plot_load_balance(summary: pd.DataFrame, out_png: Path) -> None:
     plt.close(fig)
 
 
-def plot_timeseries(deltas: pd.DataFrame, wet: Optional[pd.DataFrame], out_png: Path,
-                    roff: Optional[pd.DataFrame] = None, start_date: str = None,
-                    interval_s: int = 1800) -> None:
+def plot_timeseries(
+    deltas: pd.DataFrame,
+    wet: Optional[pd.DataFrame],
+    out_png: Path,
+    roff: Optional[pd.DataFrame] = None,
+    start_date: str = None,
+    interval_s: int = 1800,
+) -> None:
     """Per-step compute/MPI-wait time per rank, next to wet-cell/volume and applied-runoff series.
 
     All panels share a datetime x-axis anchored at *start_date*: the timing and
@@ -66,7 +76,9 @@ def plot_timeseries(deltas: pd.DataFrame, wet: Optional[pd.DataFrame], out_png: 
     """
     base = pd.Timestamp(start_date)
     n_axes = 1 + (wet is not None) + (roff is not None)
-    fig, axes = plt.subplots(n_axes, 1, figsize=(11, 3.5 * n_axes), sharex=True, squeeze=False)
+    fig, axes = plt.subplots(
+        n_axes, 1, figsize=(11, 3.5 * n_axes), sharex=True, squeeze=False
+    )
     ax1 = axes[0, 0]
     for rank, g in deltas.groupby("Rank"):
         g = g.sort_values("step")
@@ -74,7 +86,9 @@ def plot_timeseries(deltas: pd.DataFrame, wet: Optional[pd.DataFrame], out_png: 
         ax1.plot(t, g["d_Compute"], lw=1, label=f"rank {rank} compute")
         ax1.plot(t, g["d_MPI"], lw=1, ls="--", label=f"rank {rank} MPI wait")
     ax1.set_ylabel("time per output step [s]")
-    ax1.set_title("Per-step compute / MPI-wait time (load imbalance & solver slowdowns)")
+    ax1.set_title(
+        "Per-step compute / MPI-wait time (load imbalance & solver slowdowns)"
+    )
     ax1.legend(fontsize=7, ncol=4)
 
     row = 1

@@ -23,15 +23,16 @@ import logging
 from pathlib import Path
 import os
 import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from config import L0_CELL_SIZE_M, OUTPUT_CRS, DOMAIN_FILE, WORKING_DIR, NODATA
 
 from soilgrids_access import download_soilgrids
-from regrid          import reproject_to_header
-from unit_convert    import convert
-from writers         import write_all_layers, write_layers_nc
-from lut             import build_lut
-from utils           import (
+from regrid import reproject_to_header
+from unit_convert import convert
+from writers import write_all_layers, write_layers_nc
+from lut import build_lut
+from utils import (
     setup_logging,
     load_header,
 )
@@ -43,20 +44,23 @@ def main() -> None:
     setup_logging()
     log = logging.getLogger("soils_to_mhm")
 
-    out_root  = Path(OUTPUT_DIR)
+    out_root = Path(OUTPUT_DIR)
     cache_dir = out_root / "raw"
     out_root.mkdir(parents=True, exist_ok=True)
 
     # 1. Read the canonical L0 header (gauge/luse domain) as the soil grid definition.
-    soil_header  = load_header(L0_HEADER_PATH)
+    soil_header = load_header(L0_HEADER_PATH)
     meteo_header = load_header(METEO_HEADER_PATH)
     factor = int(meteo_header["cellsize"]) // SOIL_CELL_SIZE_M
     log.info(
-        "Soil grid: %d x %d cells at %d m  "
-        "(meteo %d x %d at %d m, ×%d refinement)",
-        soil_header["ncols"], soil_header["nrows"], SOIL_CELL_SIZE_M,
-        meteo_header["ncols"], meteo_header["nrows"],
-        int(meteo_header["cellsize"]), factor,
+        "Soil grid: %d x %d cells at %d m  (meteo %d x %d at %d m, ×%d refinement)",
+        soil_header["ncols"],
+        soil_header["nrows"],
+        SOIL_CELL_SIZE_M,
+        meteo_header["ncols"],
+        meteo_header["nrows"],
+        int(meteo_header["cellsize"]),
+        factor,
     )
 
     # 2. Resolve LCC CRS (read from latlon.nc produced by precip_to_mhm).
@@ -64,14 +68,18 @@ def main() -> None:
 
     # 3. Download 18 SoilGrids GeoTIFFs (cached after first run).
     tif_paths = download_soilgrids(
-        DOMAIN_FILE, cache_dir, stat=STATS,
+        DOMAIN_FILE,
+        cache_dir,
+        stat=STATS,
     )
 
     # 4. Reproject each GeoTIFF to the soil grid and apply unit conversion.
     layers: dict[str, dict[int, object]] = {"bd": {}, "cl": {}, "sn": {}}
     for prop, prop_paths in tif_paths.items():
         for layer_num, tif_path in sorted(prop_paths.items()):
-            raw = reproject_to_header(tif_path, soil_header, target_crs, nodata_out=NODATA)
+            raw = reproject_to_header(
+                tif_path, soil_header, target_crs, nodata_out=NODATA
+            )
             layers[prop][layer_num] = convert(raw, prop, nodata=NODATA)
             log.info("Converted %s layer %02d", prop, layer_num)
 
@@ -88,14 +96,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-
     # ---- USER INPUTS ---------------------------------------------------
-    L0_HEADER_PATH    = os.path.join(WORKING_DIR, "mhm_input", "luse", "header.txt")
-    METEO_HEADER_PATH = os.path.join(WORKING_DIR, "mhm_input", "meteo", "pre", "header.txt")
-    OUTPUT_DIR        = os.path.join(WORKING_DIR, "mhm_input", "morph")
-    STATS             = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
-    SOIL_CELL_SIZE_M  = L0_CELL_SIZE_M     # native SoilGrids resolution; 3000 / 250 = 12
-    TARGET_CRS_WKT    = OUTPUT_CRS
-    OUTPUT_FORMAT     = "asc"   # "asc" (18 .txt files) or "nc" (single soil_layers.nc)
-    
+    L0_HEADER_PATH = os.path.join(WORKING_DIR, "mhm_input", "luse", "header.txt")
+    METEO_HEADER_PATH = os.path.join(
+        WORKING_DIR, "mhm_input", "meteo", "pre", "header.txt"
+    )
+    OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input", "morph")
+    STATS = "Q0.5"  # SoilGrids statistic: Q0.5 | Q0.05 | Q0.95 | mean
+    SOIL_CELL_SIZE_M = L0_CELL_SIZE_M  # native SoilGrids resolution; 3000 / 250 = 12
+    TARGET_CRS_WKT = OUTPUT_CRS
+    OUTPUT_FORMAT = "asc"  # "asc" (18 .txt files) or "nc" (single soil_layers.nc)
+
     main()

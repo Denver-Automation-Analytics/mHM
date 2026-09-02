@@ -9,10 +9,12 @@ import xarray as xr
 log = logging.getLogger(__name__)
 
 
-def format_for_mhm(ds_clip: xr.Dataset,
-                   init_time: pd.Timestamp,
-                   nodata: float,
-                   ref_time: pd.Timestamp | None = None) -> tuple[xr.Dataset, pd.Timestamp]:
+def format_for_mhm(
+    ds_clip: xr.Dataset,
+    init_time: pd.Timestamp,
+    nodata: float,
+    ref_time: pd.Timestamp | None = None,
+) -> tuple[xr.Dataset, pd.Timestamp]:
     """
     Rename variables to mHM's hard-coded names, ensure DOUBLE, build a single
     time dimension (init_time + lead_time), and set fill values / attrs.
@@ -22,13 +24,15 @@ def format_for_mhm(ds_clip: xr.Dataset,
     Returns (ds_mhm, reference_time).
     """
     # Rename to mHM's required variable names
-    ds = ds_clip.rename({
-        "temperature_2m":                             "tavg",
-        "precipitation_surface":                      "pre",
-        "relative_humidity_2m":                       "rhavg",
-        "downward_long_wave_radiation_flux_surface":  "strd",
-        "downward_short_wave_radiation_flux_surface": "ssrd",
-    })
+    ds = ds_clip.rename(
+        {
+            "temperature_2m": "tavg",
+            "precipitation_surface": "pre",
+            "relative_humidity_2m": "rhavg",
+            "downward_long_wave_radiation_flux_surface": "strd",
+            "downward_short_wave_radiation_flux_surface": "ssrd",
+        }
+    )
     ds["windspeed"] = np.sqrt(ds["wind_u_10m"] ** 2 + ds["wind_v_10m"] ** 2)
     ds = ds.drop_vars(["wind_u_10m", "wind_v_10m"])
 
@@ -57,7 +61,9 @@ def format_for_mhm(ds_clip: xr.Dataset,
     if len(valid_time) >= 2:
         dt_s = float((valid_time[1] - valid_time[0]).total_seconds())
     else:
-        log.warning("Single-timestep dataset — falling back to dt_s = 3600 s for rate conversion")
+        log.warning(
+            "Single-timestep dataset — falling back to dt_s = 3600 s for rate conversion"
+        )
         dt_s = 3600.0
     # HRRR precipitation is a rate (kg m-2 s-1 = mm s-1) → mm per timestep.
     ds["pre"] = ds["pre"] * dt_s
@@ -68,52 +74,66 @@ def format_for_mhm(ds_clip: xr.Dataset,
         ds[v] = ds[v].astype("float64").fillna(nodata)
 
     # CF-style attributes
-    ds["pre"].attrs.update({
-        "units":         "mm",
-        "long_name":     "precipitation",
-        "standard_name": "precipitation_amount",
-        "missing_value": nodata,
-    })
-    ds["tavg"].attrs.update({
-        "units":         "degC",
-        "long_name":     "average air temperature",
-        "standard_name": "air_temperature",
-        "missing_value": nodata,
-    })
-    ds["windspeed"].attrs.update({
-        "units":         "m s-1",
-        "long_name":     "10 m wind speed magnitude",
-        "standard_name": "wind_speed",
-        "missing_value": nodata,
-    })
-    ds["rhavg"].attrs.update({
-        "units":         "%",
-        "long_name":     "relative humidity 2 m",
-        "standard_name": "relative_humidity",
-        "missing_value": nodata,
-    })
-    ds["ssrd"].attrs.update({
-        "units":         "J m-2",
-        "long_name":     "surface downwelling shortwave radiation",
-        "standard_name": "surface_downwelling_shortwave_flux_in_air",
-        "cell_methods":  "time: sum",
-        "missing_value": nodata,
-    })
-    ds["strd"].attrs.update({
-        "units":         "J m-2",
-        "long_name":     "surface downwelling longwave radiation",
-        "standard_name": "surface_downwelling_longwave_flux_in_air",
-        "cell_methods":  "time: sum",
-        "missing_value": nodata,
-    })
+    ds["pre"].attrs.update(
+        {
+            "units": "mm",
+            "long_name": "precipitation",
+            "standard_name": "precipitation_amount",
+            "missing_value": nodata,
+        }
+    )
+    ds["tavg"].attrs.update(
+        {
+            "units": "degC",
+            "long_name": "average air temperature",
+            "standard_name": "air_temperature",
+            "missing_value": nodata,
+        }
+    )
+    ds["windspeed"].attrs.update(
+        {
+            "units": "m s-1",
+            "long_name": "10 m wind speed magnitude",
+            "standard_name": "wind_speed",
+            "missing_value": nodata,
+        }
+    )
+    ds["rhavg"].attrs.update(
+        {
+            "units": "%",
+            "long_name": "relative humidity 2 m",
+            "standard_name": "relative_humidity",
+            "missing_value": nodata,
+        }
+    )
+    ds["ssrd"].attrs.update(
+        {
+            "units": "J m-2",
+            "long_name": "surface downwelling shortwave radiation",
+            "standard_name": "surface_downwelling_shortwave_flux_in_air",
+            "cell_methods": "time: sum",
+            "missing_value": nodata,
+        }
+    )
+    ds["strd"].attrs.update(
+        {
+            "units": "J m-2",
+            "long_name": "surface downwelling longwave radiation",
+            "standard_name": "surface_downwelling_longwave_flux_in_air",
+            "cell_methods": "time: sum",
+            "missing_value": nodata,
+        }
+    )
 
-    ref_time = pd.Timestamp(valid_time[0]) if ref_time is None else pd.Timestamp(ref_time)
+    ref_time = (
+        pd.Timestamp(valid_time[0]) if ref_time is None else pd.Timestamp(ref_time)
+    )
     return ds, ref_time
 
 
 # Per-variable reducers for hourly → daily aggregation.
-_DAILY_SUM_VARS  = ("pre", "ssrd", "strd")   # fluxes/accumulations: conserve totals
-_DAILY_MEAN_VARS = ("tavg", "rhavg", "windspeed")   # state variables: daily average
+_DAILY_SUM_VARS = ("pre", "ssrd", "strd")  # fluxes/accumulations: conserve totals
+_DAILY_MEAN_VARS = ("tavg", "rhavg", "windspeed")  # state variables: daily average
 
 
 def aggregate_to_daily(ds_mhm: xr.Dataset, nodata: float) -> xr.Dataset:
@@ -125,15 +145,15 @@ def aggregate_to_daily(ds_mhm: xr.Dataset, nodata: float) -> xr.Dataset:
     # Drop the nodata sentinel before reducing so it does not corrupt sums/means.
     ds_valid = ds_mhm.where(ds_mhm != nodata)
 
-    sum_vars  = [v for v in ds_mhm.data_vars if v in _DAILY_SUM_VARS]
+    sum_vars = [v for v in ds_mhm.data_vars if v in _DAILY_SUM_VARS]
     mean_vars = [v for v in ds_mhm.data_vars if v in _DAILY_MEAN_VARS]
-    other     = set(ds_mhm.data_vars) - set(sum_vars) - set(mean_vars)
+    other = set(ds_mhm.data_vars) - set(sum_vars) - set(mean_vars)
     if other:
         raise KeyError(f"No daily reducer defined for variable(s) {sorted(other)}.")
 
     # min_count=1 so a fully-missing day sums to NaN (not 0), letting the
     # downstream temporal gap-fill interpolate it instead of leaving a spurious 0.
-    daily_sum  = ds_valid[sum_vars].resample(time="1D").sum(skipna=True, min_count=1)
+    daily_sum = ds_valid[sum_vars].resample(time="1D").sum(skipna=True, min_count=1)
     daily_mean = ds_valid[mean_vars].resample(time="1D").mean(skipna=True)
     ds_daily = xr.merge([daily_sum, daily_mean])
 

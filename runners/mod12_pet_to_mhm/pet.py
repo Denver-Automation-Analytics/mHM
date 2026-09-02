@@ -130,7 +130,6 @@ def pet_calculator(
         pet = np.where(tavg < -5.0, 0.0, pet)
 
     elif method in {"hargreaves_samani", "hargreaves-samani", "HS"}:
-
         tmin = kwargs["tmin"]
         tmax = kwargs["tmax"]
         pet = (
@@ -237,4 +236,3 @@ def pet_calculator(
 
     # daily stays daily, otherwise convert to hourly
     return np.maximum(pet, 0.0) if stat_freq == "daily" else np.maximum(pet, 0.0) / 24.0
-

@@ -22,11 +22,11 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 _LAYER_DEPTHS: list[tuple[int, int]] = [
-    (0,    50),
-    (50,   150),
-    (150,  300),
-    (300,  600),
-    (600,  1000),
+    (0, 50),
+    (50, 150),
+    (150, 300),
+    (300, 600),
+    (600, 1000),
     (1000, 2000),
 ]
 
@@ -79,8 +79,12 @@ def build_lut(
     # Zero-value replacement (mirrors Fortran: zeros are unphysical fill values)
     for k in range(1, 7):
         layers["bd"][k] = np.where(layers["bd"][k] == 0, 1500, layers["bd"][k])
-        layers["cl"][k] = np.where(layers["cl"][k] == 0, _DEFAULT["cl"], layers["cl"][k])
-        layers["sn"][k] = np.where(layers["sn"][k] == 0, _DEFAULT["sn"], layers["sn"][k])
+        layers["cl"][k] = np.where(
+            layers["cl"][k] == 0, _DEFAULT["cl"], layers["cl"][k]
+        )
+        layers["sn"][k] = np.where(
+            layers["sn"][k] == 0, _DEFAULT["sn"], layers["sn"][k]
+        )
 
     nrows, ncols = header["nrows"], header["ncols"]
     # Valid cells require every property in every horizon (no nodata leaks into
@@ -119,15 +123,23 @@ def build_lut(
     # Append the default fallback type; masked cells in soil_id point to it
     default_id = soil_count + 1
     for layer_idx, (ud, ld) in enumerate(_LAYER_DEPTHS, start=1):
-        lut_rows.append((
-            default_id, layer_idx, ud, ld,
-            _DEFAULT["cl"], _DEFAULT["sn"], _DEFAULT["bd_gcm3"],
-        ))
+        lut_rows.append(
+            (
+                default_id,
+                layer_idx,
+                ud,
+                ld,
+                _DEFAULT["cl"],
+                _DEFAULT["sn"],
+                _DEFAULT["bd_gcm3"],
+            )
+        )
     soil_id = np.where(soil_id == nodata, default_id, soil_id)
 
     log.info(
         "Soil types: %d unique + 1 default = %d total",
-        soil_count, default_id,
+        soil_count,
+        default_id,
     )
 
     _write_classdefinition(out_dir / "soil_classdefinition.txt", lut_rows, default_id)

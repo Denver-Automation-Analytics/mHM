@@ -25,9 +25,9 @@ def build_idgauges_grid(
     """
     ncols = l0_header["ncols"]
     nrows = l0_header["nrows"]
-    cs    = l0_header["cellsize"]
-    xll   = l0_header["xllcorner"]
-    yll   = l0_header["yllcorner"]
+    cs = l0_header["cellsize"]
+    xll = l0_header["xllcorner"]
+    yll = l0_header["yllcorner"]
 
     grid = np.full((nrows, ncols), nodata, dtype=np.int32)
     transformer = Transformer.from_crs("EPSG:4326", target_crs_wkt, always_xy=True)
@@ -44,11 +44,14 @@ def build_idgauges_grid(
         x, y = transformer.transform(g["lon"], g["lat"])
         col = int((x - xll) // cs)
         row_from_bottom = int((y - yll) // cs)
-        row = nrows - 1 - row_from_bottom       # ASCII rows are north-down
+        row = nrows - 1 - row_from_bottom  # ASCII rows are north-down
 
         if not (0 <= col < ncols and 0 <= row < nrows):
-            log.warning("Gauge %s (%s) projected outside L0 grid; skipping burn.",
-                        g["site_no"], g["name"])
+            log.warning(
+                "Gauge %s (%s) projected outside L0 grid; skipping burn.",
+                g["site_no"],
+                g["name"],
+            )
             continue
 
         if (row, col) in used_cells:
@@ -56,7 +59,11 @@ def build_idgauges_grid(
             log.warning(
                 "Cell (%d, %d) already holds gauge id %d; %s (%s) demoted "
                 "(shorter record, no burn).",
-                row, col, keeper, g["site_no"], g["name"],
+                row,
+                col,
+                keeper,
+                g["site_no"],
+                g["name"],
             )
             continue
 
@@ -68,23 +75,36 @@ def build_idgauges_grid(
     return grid
 
 
-def write_id_map(path: Path,
-                 survivors: List[Dict],
-                 start: str,
-                 end: str,
-                 cadence: str) -> None:
+def write_id_map(
+    path: Path, survivors: List[Dict], start: str, end: str, cadence: str
+) -> None:
     """Write id_map.csv linking local id -> USGS site number + metadata."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "local_id", "site_no", "name", "lat", "lon",
-            "cadence", "start", "end",
-        ])
+        writer.writerow(
+            [
+                "local_id",
+                "site_no",
+                "name",
+                "lat",
+                "lon",
+                "cadence",
+                "start",
+                "end",
+            ]
+        )
         for g in sorted(survivors, key=lambda x: x["local_id"]):
-            writer.writerow([
-                g["local_id"], g["site_no"], g["name"],
-                f"{g['lat']:.6f}", f"{g['lon']:.6f}",
-                cadence, start, end,
-            ])
+            writer.writerow(
+                [
+                    g["local_id"],
+                    g["site_no"],
+                    g["name"],
+                    f"{g['lat']:.6f}",
+                    f"{g['lon']:.6f}",
+                    cadence,
+                    start,
+                    end,
+                ]
+            )
     log.info("Wrote %s", path)

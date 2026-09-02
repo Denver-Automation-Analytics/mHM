@@ -25,5 +25,10 @@ def assert_grid_consistency(ds_clip, header: dict, cell_size_m: int) -> None:
     yur = header["yllcorner"] + header["nrows"] * cell_size_m
     logging.getLogger(__name__).info(
         "Grid check OK: %d x %d cells, extents [%d, %d] to [%d, %d]",
-        nx, ny, header["xllcorner"], header["yllcorner"], xur, yur,
+        nx,
+        ny,
+        header["xllcorner"],
+        header["yllcorner"],
+        xur,
+        yur,
     )

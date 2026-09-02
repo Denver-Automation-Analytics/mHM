@@ -12,6 +12,7 @@ from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import L0_CELL_SIZE_M, OUTPUT_CRS, START_DATE, END_DATE, WORKING_DIR
+
 START_DATE = "2023-01-01"
 END_DATE = "2024-12-31"
 
@@ -27,9 +28,9 @@ def _l0_geobox(l0_nc_path: str):
     with nc.Dataset(l0_nc_path) as ds:
         x = ds["x"][:].data
         y = ds["y"][:].data
-    cs = float(x[1] - x[0])                 # +ve W->E step
+    cs = float(x[1] - x[0])  # +ve W->E step
     x_left = float(x[0]) - cs / 2.0
-    y_top = float(y[0]) + cs / 2.0          # y is N->S (descending)
+    y_top = float(y[0]) + cs / 2.0  # y is N->S (descending)
     transform = Affine(cs, 0.0, x_left, 0.0, -cs, y_top)
     return transform, (len(y), len(x))
 
@@ -43,7 +44,7 @@ def _snap_to_l0_grid(snapshot, l0_nc_path: str):
         dst_crs=snapshot.rio.crs,
         transform=transform,
         shape=(nrows, ncols),
-        resampling=Resampling.nearest,   # L0-aligned & same resolution: lossless
+        resampling=Resampling.nearest,  # L0-aligned & same resolution: lossless
     )
     # reproject stamps a _FillValue attr; drop it so the writer owns encoding.
     for name in snapped.variables:
@@ -53,20 +54,20 @@ def _snap_to_l0_grid(snapshot, l0_nc_path: str):
     return snapped
 
 
-def main(start_date: str,
-         end_date: str,
-         out_nc: str,
-         chunks: int | None = None) -> int:
+def main(start_date: str, end_date: str, out_nc: str, chunks: int | None = None) -> int:
 
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(
+        WORKING_DIR, "mhm_input/domain/watershed.geojson"
+    )  # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
         )
-    
+
     gdf = gpd.read_file(WATERSHED_FILE)
-    log.info("Loaded boundary '%s' (%d features, CRS=%s).",
-             WATERSHED_FILE, len(gdf), gdf.crs)
+    log.info(
+        "Loaded boundary '%s' (%d features, CRS=%s).", WATERSHED_FILE, len(gdf), gdf.crs
+    )
 
     chunk_dict = {"x": chunks, "y": chunks} if chunks else None
     snapshot = acquire_lai_map(
@@ -84,8 +85,11 @@ def main(start_date: str,
     try:
         mean_lai = float(np.nanmean(snapshot["Lai"].values))
         valid_frac = float(np.isfinite(snapshot["Lai"].values).mean())
-        log.info("Area-mean LAI (m2/m2): %.3f  |  valid-pixel fraction: %.1f%%",
-                 mean_lai, 100 * valid_frac)
+        log.info(
+            "Area-mean LAI (m2/m2): %.3f  |  valid-pixel fraction: %.1f%%",
+            mean_lai,
+            100 * valid_frac,
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not compute area-mean summary: %s", exc)
 
@@ -104,8 +108,8 @@ def main(start_date: str,
 
 
 if __name__ == "__main__":
-
-    main(START_DATE,
-         END_DATE,
-         out_nc=os.path.join(WORKING_DIR, "mhm_input", "lai", "lai.nc")
-         )
+    main(
+        START_DATE,
+        END_DATE,
+        out_nc=os.path.join(WORKING_DIR, "mhm_input", "lai", "lai.nc"),
+    )

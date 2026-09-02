@@ -103,6 +103,7 @@ def clip_mosaic(
         if tmp_geojson is not None and os.path.exists(tmp_geojson.name):
             os.remove(tmp_geojson.name)
 
+
 if __name__ == "__main__":
     # Example usage
     import geopandas as gpd

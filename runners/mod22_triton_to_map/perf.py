@@ -6,6 +6,7 @@ containing the same columns as *cumulative* wall-clock seconds up to that
 step. Diffing consecutive steps gives the incremental time spent per output
 interval, which is what surfaces load imbalance or solver slowdowns.
 """
+
 from __future__ import annotations
 
 import re
@@ -43,7 +44,11 @@ def read_series(perf_dir: Path) -> pd.DataFrame:
         rows.append(df)
     if not rows:
         raise FileNotFoundError(f"No performanceN.txt files found in {perf_dir}")
-    return pd.concat(rows, ignore_index=True).sort_values(["Rank", "step"]).reset_index(drop=True)
+    return (
+        pd.concat(rows, ignore_index=True)
+        .sort_values(["Rank", "step"])
+        .reset_index(drop=True)
+    )
 
 
 def step_deltas(series: pd.DataFrame, cols=DELTA_COLS) -> pd.DataFrame:
@@ -74,7 +79,9 @@ def wet_stats(nc_path: Path, var: str, nodata: float) -> pd.DataFrame:
             volume[i] = float(valid.sum())
     finally:
         ds.close()
-    return pd.DataFrame({"time": times, "step": np.arange(1, n + 1), "n_wet": n_wet, "volume": volume})
+    return pd.DataFrame(
+        {"time": times, "step": np.arange(1, n + 1), "n_wet": n_wet, "volume": volume}
+    )
 
 
 def read_roff(roff_path: Path, l1_cellsize_m: float) -> pd.DataFrame:
@@ -98,6 +105,12 @@ def read_roff(roff_path: Path, l1_cellsize_m: float) -> pd.DataFrame:
             means.append(float(vals.mean()))
             n_zones = vals.size
     mean_mm_hr = np.asarray(means)
-    total_m3_hr = mean_mm_hr * 1e-3 * n_zones * (l1_cellsize_m ** 2)
-    return pd.DataFrame({"step": np.arange(1, len(times) + 1), "time_hr": times,
-                         "mean_mm_hr": mean_mm_hr, "total_m3_hr": total_m3_hr})
+    total_m3_hr = mean_mm_hr * 1e-3 * n_zones * (l1_cellsize_m**2)
+    return pd.DataFrame(
+        {
+            "step": np.arange(1, len(times) + 1),
+            "time_hr": times,
+            "mean_mm_hr": mean_mm_hr,
+            "total_m3_hr": total_m3_hr,
+        }
+    )

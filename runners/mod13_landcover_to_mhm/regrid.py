@@ -71,17 +71,20 @@ def clip_and_reproject_to_grid(
         native_res_m = int(round(abs(x_res)))
         needs_regrid = native_res_m != l0_cellsize_m
         if needs_regrid:
-            log.info("Resolution differs (%d m → %d m); regriding to L0 grid.",
-                     native_res_m, l0_cellsize_m)
+            log.info(
+                "Resolution differs (%d m → %d m); regriding to L0 grid.",
+                native_res_m,
+                l0_cellsize_m,
+            )
 
     if needs_reproject or needs_regrid:
         transform = _affine_from_header(header)
         reprojected = clipped.rio.reproject(
-            dst_crs    = target_crs_wkt,
-            transform  = transform,
-            shape      = (header["nrows"], header["ncols"]),
-            resampling = Resampling.mode,
-            nodata     = src_nodata,
+            dst_crs=target_crs_wkt,
+            transform=transform,
+            shape=(header["nrows"], header["ncols"]),
+            resampling=Resampling.mode,
+            nodata=src_nodata,
         )
     else:
         log.info("CRS and resolution already match L0 target; skipping reproject.")

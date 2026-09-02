@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 
-This script creates probabilistic forecast from mHM simulations given the method described in Section 2.3.2 of 
+This script creates probabilistic forecast from mHM simulations given the method described in Section 2.3.2 of
 
 Woldemeskel et al. Hydrol Earth Syst Sci, 2018 vol. 22 (12) pp. 6257-6278.
 "Evaluating post-processing approaches for monthly and seasonal streamflow forecasts."
@@ -31,7 +31,7 @@ History
 -------
 Written,  Stephan Thober - Aug 2019
 Modified,
-         
+
 """
 
 # IMPORTS
@@ -52,8 +52,9 @@ def parser():
     lmbda = 0.2
     n_prob = 100
 
-    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
-                                 description=textwrap.dedent('''\
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent("""\
           description:
             This script creates probabilistic forecast from mHM simulations given the method described in Section 2.3.2 of 
 
@@ -86,21 +87,46 @@ def parser():
           Note:
             A default lambda value of 0.2 is used, which is hard-coded in mHM. It should always be the same that is used in mHM for calbration (opti_function 32). The script will raise a ValueError if another value is used.
 
-          '''))
+          """),
+    )
 
-    parser.add_argument('-f', '--discharge_file', action='store',
-                    default=discharge_file, dest='discharge_file', metavar='discharge_file',
-                    help='Name of the input discharge file (default: test_domain/output_b1/discharge.nc)')
-    parser.add_argument('-l', '--lambda', action='store',
-                    default=lmbda, dest='lmbda', metavar='lmbda',
-                    help='Lambda parameter for boxcox transformation (default: 0.2)')
-    parser.add_argument('-n', '--n_prob', action='store',
-                    default=n_prob, dest='n_prob', metavar='n_prob',
-                    help='Number of probabilistic forecasts to generate (default: 100)')
-    parser.add_argument('-o', '--out_file', action='store',
-                    default=out_file, dest='out_file', metavar='out_file',
-                    help='Name of the output file (default: test_domain/output_b1/prob_discharge.nc)')
-    
+    parser.add_argument(
+        "-f",
+        "--discharge_file",
+        action="store",
+        default=discharge_file,
+        dest="discharge_file",
+        metavar="discharge_file",
+        help="Name of the input discharge file (default: test_domain/output_b1/discharge.nc)",
+    )
+    parser.add_argument(
+        "-l",
+        "--lambda",
+        action="store",
+        default=lmbda,
+        dest="lmbda",
+        metavar="lmbda",
+        help="Lambda parameter for boxcox transformation (default: 0.2)",
+    )
+    parser.add_argument(
+        "-n",
+        "--n_prob",
+        action="store",
+        default=n_prob,
+        dest="n_prob",
+        metavar="n_prob",
+        help="Number of probabilistic forecasts to generate (default: 100)",
+    )
+    parser.add_argument(
+        "-o",
+        "--out_file",
+        action="store",
+        default=out_file,
+        dest="out_file",
+        metavar="out_file",
+        help="Name of the output file (default: test_domain/output_b1/prob_discharge.nc)",
+    )
+
     # evaluate args
     args = parser.parse_args()
     discharge_file = args.discharge_file
@@ -112,18 +138,22 @@ def parser():
 
 
 def read_data(discharge_file):
-    
-    ncin = NcDataset(discharge_file, 'r')
+
+    ncin = NcDataset(discharge_file, "r")
     vnames = list(ncin.variables.keys())
-    vnames.remove('time')
+    vnames.remove("time")
 
     for vv in vnames:
-        if vv[:4] == 'Qobs':
+        if vv[:4] == "Qobs":
             runoff_obs = ncin.variables[vv][:]
-        elif vv[:4] == 'Qsim':
+        elif vv[:4] == "Qsim":
             runoff_sim = ncin.variables[vv][:]
         else:
-            raise ValueError('Netcdf file {} does not seem to be a discharge file of mHM'.format(discharge_file))
+            raise ValueError(
+                "Netcdf file {} does not seem to be a discharge file of mHM".format(
+                    discharge_file
+                )
+            )
     ncin.close()
 
     return runoff_obs, runoff_sim
@@ -131,10 +161,10 @@ def read_data(discharge_file):
 
 def boxcox_inv(x, lmbda=0.2):
 
-    if (lmbda != 0.2):
-        raise ValueError('Inversion of boxcox only implemented for lambda value of 0.2')
+    if lmbda != 0.2:
+        raise ValueError("Inversion of boxcox only implemented for lambda value of 0.2")
 
-    return (x * lmbda + 1.)**(1./lmbda)
+    return (x * lmbda + 1.0) ** (1.0 / lmbda)
 
 
 def calculate_param(runoff_obs, runoff_sim):
@@ -156,11 +186,11 @@ def calculate_param(runoff_obs, runoff_sim):
 def sample_forecasts(n_prob, z_f, eta_mean, eta_std, rho, sigma_y, n_sample):
     runoff_prob = np.zeros((n_sample, n_prob))
     for nn in np.arange(n_prob):
-        y_hat = np.random.normal(0., sigma_y, size=n_sample)
+        y_hat = np.random.normal(0.0, sigma_y, size=n_sample)
         nu_hat = y_hat
         for ii in np.arange(n_sample - 1) + 1:
             nu_hat[ii] = nu_hat[ii - 1] * rho + y_hat[ii]
-            
+
         eta_hat = nu_hat * eta_std + eta_mean
 
         runoff_prob[:, nn] = boxcox_inv(z_f + eta_hat, lmbda=lmbda)
@@ -170,53 +200,71 @@ def sample_forecasts(n_prob, z_f, eta_mean, eta_std, rho, sigma_y, n_sample):
 def write_file(runoff_prob, eta_mean, eta_std, rho, sigma_y, discharge_file, out_file):
     copyfile(discharge_file, out_file)
 
-    ncout = NcDataset(out_file, 'a')
+    ncout = NcDataset(out_file, "a")
 
     ncout.createDimension("n_prob", n_prob)
 
     var = ncout.createVariable("runoff_prob", "f8", ("n_prob", "time"))
     var[:] = runoff_prob.transpose()
-    var.createAttribute("long_name", "probabilistic forecast based on Woldemeskel et al. (2018)")
+    var.createAttribute(
+        "long_name", "probabilistic forecast based on Woldemeskel et al. (2018)"
+    )
     var.createAttribute("units", "m3 s-1")
 
-    ncout.createAttribute("Description", "Created probabilistic forecast given the output of mHM in Qsim_XXX and Qobs_xxx variable and the statistical model described in Woldemeskel et al. (2018). Lambda parameter of the boxcox transformation is set to the {:.2f}".format(lmbda))
+    ncout.createAttribute(
+        "Description",
+        "Created probabilistic forecast given the output of mHM in Qsim_XXX and Qobs_xxx variable and the statistical model described in Woldemeskel et al. (2018). Lambda parameter of the boxcox transformation is set to the {:.2f}".format(
+            lmbda
+        ),
+    )
     ncout.createAttribute("lambda", lmbda)
     ncout.createAttribute("script", "prob_forecast.py")
-    ncout.createAttribute("paper", "Woldemeskel et al. Hydrol Earth Syst Sci, 2018 vol. 22 (12) pp. 6257-6278. 'Evaluating post-processing approaches for monthly and seasonal streamflow forecasts.', https://www.hydrol-earth-syst-sci.net/22/6257/2018/")
+    ncout.createAttribute(
+        "paper",
+        "Woldemeskel et al. Hydrol Earth Syst Sci, 2018 vol. 22 (12) pp. 6257-6278. 'Evaluating post-processing approaches for monthly and seasonal streamflow forecasts.', https://www.hydrol-earth-syst-sci.net/22/6257/2018/",
+    )
     ncout.createAttribute("created", asctime())
-    ncout.createAttribute("eta_mean", "mean of boxcox transformed error: {:f}".format(eta_mean))
-    ncout.createAttribute("eta_std", "standard deviation of boxcox transformed error: {:f}".format(eta_std))
+    ncout.createAttribute(
+        "eta_mean", "mean of boxcox transformed error: {:f}".format(eta_mean)
+    )
+    ncout.createAttribute(
+        "eta_std",
+        "standard deviation of boxcox transformed error: {:f}".format(eta_std),
+    )
     ncout.createAttribute("rho", "lag-1 auto-correlation: {:f}".format(rho))
     ncout.createAttribute("sigma_y", "lag_1 standard deviation: {:f}".format(sigma_y))
     ncout.close()
 
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     discharge_file, out_file, lmbda, n_prob = parser()
 
     runoff_obs, runoff_sim = read_data(discharge_file)
 
     # remove missing values
-    mask = np.logical_or(runoff_obs < 0., runoff_sim < 0.)
+    mask = np.logical_or(runoff_obs < 0.0, runoff_sim < 0.0)
     if np.sum(mask) > 0:
-        print('***WARNING: missing values are removed from observed and simulated data')
+        print("***WARNING: missing values are removed from observed and simulated data")
     runoff_obs = runoff_obs[~mask]
     runoff_sim = runoff_sim[~mask]
 
     # using nomenclature of Woldemeskel et al. 2018
-    z_f, eta_mean, eta_std, rho, sigma_y, n_sample = calculate_param(runoff_obs, runoff_sim)
+    z_f, eta_mean, eta_std, rho, sigma_y, n_sample = calculate_param(
+        runoff_obs, runoff_sim
+    )
 
     # sample forecast
-    runoff_prob = sample_forecasts(n_prob, z_f, eta_mean, eta_std, rho, sigma_y, n_sample)
+    runoff_prob = sample_forecasts(
+        n_prob, z_f, eta_mean, eta_std, rho, sigma_y, n_sample
+    )
 
     # add missing values
-    if np.sum(mask) > 0.:
-        tmp = np.zeros(mask.shape + (n_prob,)) - 9999.
+    if np.sum(mask) > 0.0:
+        tmp = np.zeros(mask.shape + (n_prob,)) - 9999.0
         tmp[~mask] = runoff_prob
         runoff_prob = tmp
 
     # write to file
     write_file(runoff_prob, eta_mean, eta_std, rho, sigma_y, discharge_file, out_file)
-    
-    print('Done!')
+
+    print("Done!")

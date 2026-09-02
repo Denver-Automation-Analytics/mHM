@@ -10,7 +10,9 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
-def write_ascii(path: Path, header: dict, grid: np.ndarray, nodata: int = -9999) -> None:
+def write_ascii(
+    path: Path, header: dict, grid: np.ndarray, nodata: int = -9999
+) -> None:
     """Write a single ArcGIS ASCII grid readable by mHM and the Fortran prep code."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if grid.shape != (header["nrows"], header["ncols"]):
@@ -50,7 +52,7 @@ def write_all_layers(
 
 
 _PROP_UNITS = {"bd": "mg cm-3", "cl": "%", "sn": "%"}
-_PROP_LONG  = {"bd": "bulk density", "cl": "clay fraction", "sn": "sand fraction"}
+_PROP_LONG = {"bd": "bulk density", "cl": "clay fraction", "sn": "sand fraction"}
 
 
 def write_layers_nc(
@@ -65,26 +67,31 @@ def write_layers_nc(
     out_path = out_dir / "soil_layers.nc"
 
     with nc.Dataset(out_path, "w") as ds:
-        ds.xllcorner    = float(header["xllcorner"])
-        ds.yllcorner    = float(header["yllcorner"])
-        ds.cellsize     = int(header["cellsize"])
+        ds.xllcorner = float(header["xllcorner"])
+        ds.yllcorner = float(header["yllcorner"])
+        ds.cellsize = int(header["cellsize"])
         ds.NODATA_value = int(nodata)
 
         ds.createDimension("layer", len(layer_nums))
-        ds.createDimension("y",     header["nrows"])
-        ds.createDimension("x",     header["ncols"])
+        ds.createDimension("y", header["nrows"])
+        ds.createDimension("x", header["ncols"])
 
         lv = ds.createVariable("layer", "i4", ("layer",))
         lv[:] = layer_nums
 
         for prop, prop_layers in layers.items():
-            stack = np.stack([prop_layers[k] for k in layer_nums], axis=0).astype(np.int32)
-            v = ds.createVariable(
-                prop, "i4", ("layer", "y", "x"),
-                fill_value=nodata, zlib=True,
+            stack = np.stack([prop_layers[k] for k in layer_nums], axis=0).astype(
+                np.int32
             )
-            v.units         = _PROP_UNITS[prop]
-            v.long_name     = _PROP_LONG[prop]
+            v = ds.createVariable(
+                prop,
+                "i4",
+                ("layer", "y", "x"),
+                fill_value=nodata,
+                zlib=True,
+            )
+            v.units = _PROP_UNITS[prop]
+            v.long_name = _PROP_LONG[prop]
             v.missing_value = nodata
             v[:] = stack
 

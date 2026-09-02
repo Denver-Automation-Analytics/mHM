@@ -23,7 +23,9 @@ def _sanitize_attr(value):
         return json.dumps(value, default=str, sort_keys=True)
     if isinstance(value, set):
         return sorted(value)
-    if isinstance(value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)):
+    if isinstance(
+        value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)
+    ):
         return value
     return str(value)
 
@@ -74,14 +76,14 @@ def write_lai_nc(
 
     encoding = {
         "lai": {
-            "dtype":      "f4",
+            "dtype": "f4",
             "_FillValue": nodata,
-            "zlib":       True,
-            "complevel":  4,
+            "zlib": True,
+            "complevel": 4,
         },
         "time": {
-            "dtype":    "i4",
-            "units":    "hours since 1900-01-01 00:00:00",
+            "dtype": "i4",
+            "units": "hours since 1900-01-01 00:00:00",
             "calendar": "standard",
         },
     }
@@ -90,7 +92,9 @@ def write_lai_nc(
     log.info("Wrote %s (12-month grids, year %d)", out_path, ref_year)
 
 
-def _tile_snapshot(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex) -> xr.Dataset:
+def _tile_snapshot(
+    lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex
+) -> xr.Dataset:
     """Tile one 2-D snapshot into 12 identical monthly grids (flat climatology)."""
     lai_base = lai_var.clip(_LAI_MIN, _LAI_MAX)
     # Fill cloud/QC gaps with domain median so mHM finds no nodata within its mask.
@@ -102,12 +106,14 @@ def _tile_snapshot(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex) -> xr
 
     return (
         xr.concat([lai_base] * 12, dim=pd.DatetimeIndex(monthly_times, name="time"))
-        .rename("lai")                       # Fortran reader looks for variable 'lai'
+        .rename("lai")  # Fortran reader looks for variable 'lai'
         .to_dataset()
     )
 
 
-def _build_monthly_grids(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex) -> xr.Dataset:
+def _build_monthly_grids(
+    lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex
+) -> xr.Dataset:
     """
     Build 12 real monthly grids (Jan..Dec) from a ``Lai(month, y, x)`` field.
 
@@ -132,4 +138,3 @@ def _build_monthly_grids(lai_var: xr.DataArray, monthly_times: pd.DatetimeIndex)
 
     lai = xr.concat(filled, dim=pd.DatetimeIndex(monthly_times, name="time"))
     return lai.drop_vars("month", errors="ignore").rename("lai").to_dataset()
-

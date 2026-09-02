@@ -110,14 +110,14 @@ def mosaic_tiles(tiles, output_path: str) -> None:
     """
 
     if isinstance(tiles, (str, os.PathLike)):
-        candidates = glob.glob(os.path.join(os.fspath(tiles), "**", "*"), recursive=True)
+        candidates = glob.glob(
+            os.path.join(os.fspath(tiles), "**", "*"), recursive=True
+        )
     else:
         candidates = [os.fspath(t) for t in tiles]
 
     tif_files = sorted(
-        f
-        for f in candidates
-        if not f.lower().endswith(".aux.xml") and _is_tiff(f)
+        f for f in candidates if not f.lower().endswith(".aux.xml") and _is_tiff(f)
     )
 
     if not tif_files:
@@ -164,6 +164,7 @@ def mosaic_tiles(tiles, output_path: str) -> None:
         out_ds = None  # close / finalise file
 
     log.info("  Output      : %s", output_path)
+
 
 # ----------------------------- Main ------------------------------------------
 

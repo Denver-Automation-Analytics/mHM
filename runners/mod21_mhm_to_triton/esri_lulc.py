@@ -79,9 +79,7 @@ def search_items(bbox_wgs84, year: str | None):
     log.info("Found %d STAC item(s).", len(items))
 
     if not items:
-        raise RuntimeError(
-            "No items found. Check bbox, year, and collection name."
-        )
+        raise RuntimeError("No items found. Check bbox, year, and collection name.")
     return items
 
 
@@ -148,8 +146,13 @@ def save_output(da: xr.DataArray, out_path: Path):
     log.info("Saved: %s", out_path)
 
 
-def acquire(geojson_path: Path, target_crs: str, out_path: Path,
-            year: str | None = None, resolution: float = 10.0) -> Path:
+def acquire(
+    geojson_path: Path,
+    target_crs: str,
+    out_path: Path,
+    year: str | None = None,
+    resolution: float = 10.0,
+) -> Path:
     """Acquire IO 10 m LULC for a domain and write a GeoTIFF to *out_path*.
 
     Importable entry point used by the mod22 pipeline; returns *out_path*.
@@ -172,30 +175,36 @@ def main():
         description="Acquire ESRI/Impact Observatory 10m Land Cover."
     )
     parser.add_argument("geojson", type=Path, help="Domain GeoJSON file.")
+    parser.add_argument("--crs", required=True, help="Target CRS, e.g. 'EPSG:32610'.")
     parser.add_argument(
-        "--crs", required=True, help="Target CRS, e.g. 'EPSG:32610'."
-    )
-    parser.add_argument(
-        "--outdir", type=Path, default=Path("./output"),
+        "--outdir",
+        type=Path,
+        default=Path("./output"),
         help="Output folder.",
     )
     parser.add_argument(
-        "--year", default=None,
+        "--year",
+        default=None,
         help="Year to acquire (e.g. 2023). Default: latest available.",
     )
     parser.add_argument(
-        "--resolution", type=float, default=10.0,
+        "--resolution",
+        type=float,
+        default=10.0,
         help="Output resolution in target CRS units (default 10).",
     )
     parser.add_argument(
-        "--name", default="io_lulc",
+        "--name",
+        default="io_lulc",
         help="Output filename prefix.",
     )
     args = parser.parse_args()
 
     year_tag = args.year if args.year else "latest"
     out_path = args.outdir / f"{args.name}_{year_tag}_{args.crs.replace(':', '')}.tif"
-    acquire(args.geojson, args.crs, out_path, year=args.year, resolution=args.resolution)
+    acquire(
+        args.geojson, args.crs, out_path, year=args.year, resolution=args.resolution
+    )
 
 
 if __name__ == "__main__":

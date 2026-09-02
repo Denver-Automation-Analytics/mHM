@@ -124,7 +124,7 @@ mhm.model.init()
 mhm.run.prepare()
 ndomians = mhm.run.get_ndomains()
 for i in range(1, ndomians + 1):
-    mhm.run.prepare_domain(domain=i) # 0 by default
+    mhm.run.prepare_domain(domain=i)  # 0 by default
     while not mhm.run.finished():
         mhm.run.do_time_step()
         mhm.run.write_output()

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-def _lcover_block(scenes: List[Tuple[int, str]], first_year: int, last_year: int) -> str:
+def _lcover_block(
+    scenes: List[Tuple[int, str]], first_year: int, last_year: int
+) -> str:
     lines = [f"  nLCoverScene = {len(scenes)}"]
     for i, (year, fname) in enumerate(scenes, start=1):
         # First scene must cover the simulation start (incl. warming period).
@@ -30,7 +32,7 @@ def _gauge_block(gauges: List[Dict]) -> str:
     for j, g in enumerate(gauges, start=1):
         lines += [
             f"  Gauge_id(1,{j})       = {g['local_id']}",
-            f"  gauge_filename(1,{j}) = \"{g['filename']}\"",
+            f'  gauge_filename(1,{j}) = "{g["filename"]}"',
         ]
     return "\n".join(lines)
 

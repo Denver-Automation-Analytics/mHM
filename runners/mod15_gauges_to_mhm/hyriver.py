@@ -41,9 +41,9 @@ def get_usgs_stations(
     # Get the bounding box of the model perimeter
     bbox = tuple(model_perimeter.bounds.values[0])  # (minx, miny, maxx, maxy)
     if variable_type == "flow":
-        parameter_cd = "00060" # discharge in cubic feet per second
+        parameter_cd = "00060"  # discharge in cubic feet per second
     elif variable_type == "stage":
-        parameter_cd = "00065" # gage height in feet
+        parameter_cd = "00065"  # gage height in feet
     # Query gage stations with daily values
     query_dv = {
         "bBox": ",".join(f"{b:.06f}" for b in bbox),
@@ -108,12 +108,18 @@ def _map_qualifier(code: str) -> str:
 
 # UTC offsets for the tz codes USGS reports in the RDB tz_cd column.
 _TZ_OFFSETS = {
-    "EST": "-0500", "EDT": "-0400",
-    "CST": "-0600", "CDT": "-0500",
-    "MST": "-0700", "MDT": "-0600",
-    "PST": "-0800", "PDT": "-0700",
-    "AKST": "-0900", "AKDT": "-0800",
-    "HST": "-1000", "HDT": "-0900",
+    "EST": "-0500",
+    "EDT": "-0400",
+    "CST": "-0600",
+    "CDT": "-0500",
+    "MST": "-0700",
+    "MDT": "-0600",
+    "PST": "-0800",
+    "PDT": "-0700",
+    "AKST": "-0900",
+    "AKDT": "-0800",
+    "HST": "-1000",
+    "HDT": "-0900",
 }
 
 
@@ -126,24 +132,27 @@ def _to_utc_index(dt_col: pd.Series, tz_col: Optional[pd.Series]) -> pd.Datetime
     dt = dt_col.astype(str).str.strip()
     if tz_col is not None:
         offsets = tz_col.astype(str).str.strip().map(_TZ_OFFSETS).fillna("+0000")
-        return pd.DatetimeIndex(pd.to_datetime(dt + " " + offsets, utc=True, errors="coerce"))
+        return pd.DatetimeIndex(
+            pd.to_datetime(dt + " " + offsets, utc=True, errors="coerce")
+        )
     return pd.DatetimeIndex(pd.to_datetime(dt, utc=True, errors="coerce"))
 
 
-def get_nwis(site: str, 
-             parameter: str,
-             frequency: str,
-             start_date: str,
-             end_date: str,
-             output_format: Optional[str] = "rdb",
-             ):
-    '''retrieve instantaneous data for a usgs site, write to a file (optional, and return as a dataframe
+def get_nwis(
+    site: str,
+    parameter: str,
+    frequency: str,
+    start_date: str,
+    end_date: str,
+    output_format: Optional[str] = "rdb",
+):
+    """retrieve instantaneous data for a usgs site, write to a file (optional, and return as a dataframe
 
     Note: currently limits to USGS sites only, all sites (regardless of active status), and stream discharge only
     Note: api call built from USGS api builder: https://waterservices.usgs.gov/rest/IV-Test-Tool.html
 
     Args
-        site (str): gage id 
+        site (str): gage id
         parameter (str): one of 'Flow', 'Stage', or 'Precipitation'
         frequency (str): one of 'iv' or 'dv'
         start_date (str): formatted to 'YYYY-MM-DD'
@@ -152,11 +161,10 @@ def get_nwis(site: str,
         output_format (str): one of [txt, waterML-2.0, json].
     Return
         df (pd.DataFrame): formatted dataframe of peak data
-    '''
+    """
 
-    if parameter == 'Flow':
-
-        param_id = '00060'
+    if parameter == "Flow":
+        param_id = "00060"
         url = (
             f"https://waterservices.usgs.gov/nwis/{frequency}/?format={output_format}"
             f"&sites={site}&startDT={start_date}&endDT={end_date}"
@@ -169,33 +177,46 @@ def get_nwis(site: str,
             return None
 
         if r.status_code != 200:
-            log.warning("NWIS returned HTTP %s for site %s (%s)", r.status_code, site, url)
+            log.warning(
+                "NWIS returned HTTP %s for site %s (%s)", r.status_code, site, url
+            )
             return None
 
         try:
-            if output_format == 'rdb':
-                df = pd.read_table(io.StringIO(r.content.decode('utf-8')),
-                                   comment='#', skip_blank_lines=True)
-                df = df.iloc[1:].copy()   # drop the RDB format-definition row
+            if output_format == "rdb":
+                df = pd.read_table(
+                    io.StringIO(r.content.decode("utf-8")),
+                    comment="#",
+                    skip_blank_lines=True,
+                )
+                df = df.iloc[1:].copy()  # drop the RDB format-definition row
 
             # Select columns by name so extra time-series columns can't misalign parsing.
-            value_cols = [c for c in df.columns if "_00060" in c and not c.endswith("_cd")]
+            value_cols = [
+                c for c in df.columns if "_00060" in c and not c.endswith("_cd")
+            ]
             qual_cols = [c for c in df.columns if c.endswith("_cd")]
             if df.empty or not value_cols or "datetime" not in df.columns:
-                log.info("No %s discharge for site %s in %s..%s", frequency, site, start_date, end_date)
+                log.info(
+                    "No %s discharge for site %s in %s..%s",
+                    frequency,
+                    site,
+                    start_date,
+                    end_date,
+                )
                 return None
 
             value_col = value_cols[0]
             qual_col = qual_cols[0] if qual_cols else None
 
             first_val = str(df[value_col].values[0])
-            if first_val == 'ZFL':
+            if first_val == "ZFL":
                 log.info("Zero flow condition for site %s", site)
                 return None
-            if first_val == '***':
+            if first_val == "***":
                 log.info("Data temporarily unavailable for site %s", site)
                 return None
-            if df['site_no'].isnull().all():
+            if df["site_no"].isnull().all():
                 log.info("No site_no rows for site %s", site)
                 return None
 
@@ -212,114 +233,121 @@ def get_nwis(site: str,
                 index=timestamps,
             )
         except Exception as exc:
-            log.warning("Failed to parse NWIS response for site %s (%s): %s", site, url, exc)
+            log.warning(
+                "Failed to parse NWIS response for site %s (%s): %s", site, url, exc
+            )
             return None
 
-    elif parameter == 'Precipitation':
-        param_id = '00045'
+    elif parameter == "Precipitation":
+        param_id = "00045"
         try:
             # build url and make call for all available rain gage sites for CONUS
             url = f"https://waterservices.usgs.gov/nwis/{frequency}/?format={output_format}&sites={site}&startDT={start_date}&endDT={end_date}&parameterCd={param_id}&siteStatus=all"
             r = requests.get(url)
 
             # check that api call worked
-            if r.status_code!=200:
+            if r.status_code != 200:
                 print(f"Server response {r.status_code}: Returning None")
                 return None
 
             # decode results
-            if output_format=='rdb':
-                df = pd.read_table(io.StringIO(r.content.decode('utf-8')), 
-                                comment='#',
-                                skip_blank_lines=True)
+            if output_format == "rdb":
+                df = pd.read_table(
+                    io.StringIO(r.content.decode("utf-8")),
+                    comment="#",
+                    skip_blank_lines=True,
+                )
                 df = df.iloc[1:].copy()
 
-            if frequency == 'iv':
+            if frequency == "iv":
                 data_col_idx = 4
-            elif frequency == 'dv':
+            elif frequency == "dv":
                 data_col_idx = 3
             timestep_idx = 2
 
             if len(df.dropna()) == 0:
-                print('No data available for the time period specified')
+                print("No data available for the time period specified")
                 return None
-            elif df[df.columns[data_col_idx]].values[0] == '***':
-                print('Data temporarily unavailable for the time period specified')
+            elif df[df.columns[data_col_idx]].values[0] == "***":
+                print("Data temporarily unavailable for the time period specified")
                 return None
-            elif set(df['site_no'].isnull()) == {True}:
+            elif set(df["site_no"].isnull()) == {True}:
                 return None
 
             # format the final dataframe to represent the observed rainfall following a datetime index
-            final_df = pd.DataFrame(df[df.columns[data_col_idx]].astype('float'))
+            final_df = pd.DataFrame(df[df.columns[data_col_idx]].astype("float"))
             final_df.columns = [site]
             final_df.index = pd.to_datetime(df[df.columns[timestep_idx]].values)
 
             return final_df
-    
+
         # when an incorrect gage number is sent to the api, we end up at usgs url (second failure mechanism)
         except:
             return None
-        
-    elif parameter == 'Stage':
-        
-        param_id = '00065'
+
+    elif parameter == "Stage":
+        param_id = "00065"
         try:
             # build url and make call only for USGS funded sites
             url = f"https://waterservices.usgs.gov/nwis/{frequency}/?format={output_format}&sites={site}&startDT={start_date}&endDT={end_date}&parameterCd={param_id}&siteType=ST&agencyCd=usgs&siteStatus=all"
             r = requests.get(url)
 
             # check that api call worked
-            if r.status_code!=200:
+            if r.status_code != 200:
                 print(f"Server response {r.status_code}: Returning None")
                 return None
 
             # decode results
-            if output_format=='rdb':
-                df = pd.read_table(io.StringIO(r.content.decode('utf-8')), 
-                                comment='#',
-                                skip_blank_lines=True)
+            if output_format == "rdb":
+                df = pd.read_table(
+                    io.StringIO(r.content.decode("utf-8")),
+                    comment="#",
+                    skip_blank_lines=True,
+                )
                 df = df.iloc[1:].copy()
-                
 
-            if frequency == 'iv':
+            if frequency == "iv":
                 # Columns: ['agency_cd', 'site_no', 'datetime', 'value', 'qualifiers', 'remark']
                 data_col_idx = 4
-            elif frequency == 'dv':
+            elif frequency == "dv":
                 # Columns: ['agency_cd', 'site_no', 'datetime', 'value', 'qualifiers']
                 data_col_idx = 3
             timestep_idx = 2
 
             if len(df.dropna()) == 0:
-                print('No data available for the time period specified')
+                print("No data available for the time period specified")
                 return None
-            elif df[df.columns[data_col_idx]].values[0] == 'ZFL':
-                print('Zero flow condition: Return None')
+            elif df[df.columns[data_col_idx]].values[0] == "ZFL":
+                print("Zero flow condition: Return None")
                 return None
-            elif df[df.columns[data_col_idx]].values[0] == '***':
-                print('Data temporarily unavailable for the time period specified')
+            elif df[df.columns[data_col_idx]].values[0] == "***":
+                print("Data temporarily unavailable for the time period specified")
                 return None
-            elif set(df['site_no'].isnull()) == {True}:
+            elif set(df["site_no"].isnull()) == {True}:
                 return None
-            
+
             # format the final dataframe to represent the observed rainfall following a datetime index
-            final_df = pd.DataFrame(df[df.columns[data_col_idx]].astype('float'))
+            final_df = pd.DataFrame(df[df.columns[data_col_idx]].astype("float"))
             final_df.columns = [site]
             final_df.index = pd.to_datetime(df[df.columns[timestep_idx]].values)
 
             return final_df
-    
+
         # when an incorrect gage number is sent to the api, we end up at usgs url (second failure mechanism)
         except:
             return None
 
     else:
-        print('Only gaged Streamflow and Precipitation are available parameters for analysis at this point in time')
+        print(
+            "Only gaged Streamflow and Precipitation are available parameters for analysis at this point in time"
+        )
         return
 
 
 # ---------------------------------------------------------------------------
 # iv post-processing helpers
 # ---------------------------------------------------------------------------
+
 
 def _dominant_hourly_status(series: pd.Series) -> str:
     """Return dominant approval status across an aggregation window."""
@@ -355,13 +383,14 @@ def prep_hourly(df: pd.DataFrame) -> pd.DataFrame:
     df["_vw"] = np.where(valid, df["value"] * df["_w"], np.nan)
     df["_wv"] = np.where(valid, df["_w"], 0.0)  # weight only for valid rows
 
-    hourly_vw  = df["_vw"].resample("1h").sum(min_count=1)
-    hourly_w   = df["_wv"].resample("1h").sum()
+    hourly_vw = df["_vw"].resample("1h").sum(min_count=1)
+    hourly_w = df["_wv"].resample("1h").sum()
     hourly_val = hourly_vw / hourly_w  # NaN for hours with no valid readings
 
     hourly_status = df["approval_status"].resample("1h").apply(_dominant_hourly_status)
 
     return pd.DataFrame({"value": hourly_val, "approval_status": hourly_status})
+
 
 def prep_daily(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize a dv DataFrame to a gap-free 1-day cadence.
@@ -381,6 +410,7 @@ def prep_daily(df: pd.DataFrame) -> pd.DataFrame:
     daily_status = df["approval_status"].resample("1D").apply(_dominant_hourly_status)
 
     return pd.DataFrame({"value": daily_val, "approval_status": daily_status})
+
 
 def interpolate_gaps(
     df: pd.DataFrame,

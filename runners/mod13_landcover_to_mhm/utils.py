@@ -26,11 +26,11 @@ def load_header(path: str | Path) -> dict:
         parsed[key] = val
 
     return {
-        "ncols":        int(parsed["ncols"]),
-        "nrows":        int(parsed["nrows"]),
-        "xllcorner":    float(parsed["xllcorner"]),
-        "yllcorner":    float(parsed["yllcorner"]),
-        "cellsize":     float(parsed["cellsize"]),
+        "ncols": int(parsed["ncols"]),
+        "nrows": int(parsed["nrows"]),
+        "xllcorner": float(parsed["xllcorner"]),
+        "yllcorner": float(parsed["yllcorner"]),
+        "cellsize": float(parsed["cellsize"]),
         "NODATA_value": float(parsed["NODATA_value"]),
     }
 
@@ -54,6 +54,7 @@ def write_header_txt(header: dict, out_path: Path) -> None:
 def load_header_from_nc(path: str | Path) -> dict:
     """Derive an mHM-style header dict from a morph NetCDF file written by write_nc."""
     import netCDF4 as nc4
+
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Morph NetCDF not found: {path}")
@@ -71,32 +72,34 @@ def load_header_from_nc(path: str | Path) -> dict:
     xllcorner = float(x.min() - 0.5 * cellsize)
     yllcorner = float(y.min() - 0.5 * cellsize)
     return {
-        "ncols":        len(x),
-        "nrows":        len(y),
-        "xllcorner":    xllcorner,
-        "yllcorner":    yllcorner,
-        "cellsize":     cellsize,
+        "ncols": len(x),
+        "nrows": len(y),
+        "xllcorner": xllcorner,
+        "yllcorner": yllcorner,
+        "cellsize": cellsize,
         "NODATA_value": nodata,
     }
 
 
 # --- L0 header derivation ------------------------------------------
-def build_l0_header_from_watershed(watershed_path: str, l0_cellsize_m: int, crs: str) -> dict:
+def build_l0_header_from_watershed(
+    watershed_path: str, l0_cellsize_m: int, crs: str
+) -> dict:
     """Derive L0 grid by projecting the watershed bbox to crs and snapping to l0_cellsize_m."""
     ws = gpd.read_file(watershed_path).to_crs(crs)
     raw_xmin, raw_ymin, raw_xmax, raw_ymax = ws.total_bounds
     # math.floor/ceil return int; multiply by int cellsize stays int — cast to float for header formatting
     xll = float(math.floor(raw_xmin / l0_cellsize_m) * l0_cellsize_m)
     yll = float(math.floor(raw_ymin / l0_cellsize_m) * l0_cellsize_m)
-    xur = float(math.ceil(raw_xmax  / l0_cellsize_m) * l0_cellsize_m)
-    yur = float(math.ceil(raw_ymax  / l0_cellsize_m) * l0_cellsize_m)
+    xur = float(math.ceil(raw_xmax / l0_cellsize_m) * l0_cellsize_m)
+    yur = float(math.ceil(raw_ymax / l0_cellsize_m) * l0_cellsize_m)
     ncols = round((xur - xll) / l0_cellsize_m)
     nrows = round((yur - yll) / l0_cellsize_m)
     return {
-        "ncols":        ncols,
-        "nrows":        nrows,
-        "xllcorner":    xll,
-        "yllcorner":    yll,
-        "cellsize":     l0_cellsize_m,
+        "ncols": ncols,
+        "nrows": nrows,
+        "xllcorner": xll,
+        "yllcorner": yll,
+        "cellsize": l0_cellsize_m,
         "NODATA_value": -9999,
     }

@@ -7,6 +7,7 @@ observation point (``H_at_Point_<n>``, in the order of the ``.obs`` file). This
 module turns each such file into a stage-vs-time line plot so the hydrograph at
 the monitoring points can be read directly.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -56,7 +57,7 @@ def plot_stage_hydrographs(path: Path, out_png: Path, start_date: str) -> int:
     onsets = []
     for col in cols:
         s = df[col]
-        line, = ax.plot(s.index, s.to_numpy(), lw=1.2, label=col)
+        (line,) = ax.plot(s.index, s.to_numpy(), lw=1.2, label=col)
         finite = s.notna().to_numpy()
         if finite.any() and not finite.all():
             last = np.where(finite)[0].max()
@@ -64,15 +65,28 @@ def plot_stage_hydrographs(path: Path, out_png: Path, start_date: str) -> int:
             nan_after = nan_after[nan_after > last]
             if nan_after.size:
                 onsets.append(s.index[nan_after.min()])
-                ax.plot(s.index[last], s.iloc[last], "x", color=line.get_color(), ms=8, mew=2)
+                ax.plot(
+                    s.index[last],
+                    s.iloc[last],
+                    "x",
+                    color=line.get_color(),
+                    ms=8,
+                    mew=2,
+                )
 
     if onsets:
         first = min(onsets)
         ax.axvspan(first, df.index.max(), color="red", alpha=0.08)
         ax.axvline(first, color="red", ls="--", lw=1)
-        ax.annotate("solution diverged (NaN)", xy=(first, ax.get_ylim()[1]),
-                    xytext=(4, -10), textcoords="offset points", color="red",
-                    fontsize=8, va="top")
+        ax.annotate(
+            "solution diverged (NaN)",
+            xy=(first, ax.get_ylim()[1]),
+            xytext=(4, -10),
+            textcoords="offset points",
+            color="red",
+            fontsize=8,
+            va="top",
+        )
 
     ax.set_xlim(df.index.min(), df.index.max())
     ax.set_ylabel("stage / water depth [m]")

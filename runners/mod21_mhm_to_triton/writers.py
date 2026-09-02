@@ -3,6 +3,7 @@
 Large grids are streamed row-by-row so the full-resolution DEM and runoff map are
 never held in memory at once.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,12 +24,26 @@ from config import NODATA
 _ROFF_TIME_BLOCK = 365
 
 # ESRI D8 codes -> (east, north) unit vectors: +qx = east (increasing col), +qy = north (decreasing row).
-_D8 = {1: (1, 0), 2: (1, -1), 4: (0, -1), 8: (-1, -1),
-       16: (-1, 0), 32: (-1, 1), 64: (0, 1), 128: (1, 1)}
+_D8 = {
+    1: (1, 0),
+    2: (1, -1),
+    4: (0, -1),
+    8: (-1, -1),
+    16: (-1, 0),
+    32: (-1, 1),
+    64: (0, 1),
+    128: (1, 1),
+}
 
 
-def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
-                       iy1: np.ndarray, dem_path: Path, rmap_path: Path) -> None:
+def write_dem_and_rmap(
+    grid: Dict,
+    zone_ids: np.ndarray,
+    ix1: np.ndarray,
+    iy1: np.ndarray,
+    dem_path: Path,
+    rmap_path: Path,
+) -> None:
     """Write the ESRI-ASCII DEM and the matching integer runoff map in one pass.
 
     Both files share the DEM grid. A TRITON cell takes the zone id of the L1
@@ -41,9 +56,11 @@ def write_dem_and_rmap(grid: Dict, zone_ids: np.ndarray, ix1: np.ndarray,
     xll = grid["x0"]
     yll = grid["y0"] - nrows * cs
     # space-separated header: TRITON's ASCII parser splits on spaces, not tabs
-    header = (f"ncols {ncols}\nnrows {nrows}\n"
-              f"xllcorner {xll}\nyllcorner {yll}\n"
-              f"cellsize {cs}\nNODATA_value {NODATA}\n")
+    header = (
+        f"ncols {ncols}\nnrows {nrows}\n"
+        f"xllcorner {xll}\nyllcorner {yll}\n"
+        f"cellsize {cs}\nNODATA_value {NODATA}\n"
+    )
 
     ny1, nx1 = zone_ids.shape
     with open(dem_path, "w") as fd, open(rmap_path, "w") as fr:
@@ -81,7 +98,7 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
         for start in range(0, nt, _ROFF_TIME_BLOCK):
             stop = min(start + _ROFF_TIME_BLOCK, nt)
             block = da.isel(time=slice(start, stop)).values  # (b, ny1, nx1)
-            block = block[:, valid] / float(step_h)          # (b, N) mm/hr
+            block = block[:, valid] / float(step_h)  # (b, N) mm/hr
             block = np.nan_to_num(block, nan=0.0)
             for k in range(block.shape[0]):
                 t = (start + k) * step_h
@@ -90,11 +107,20 @@ def write_roff(runoff: Dict, valid: np.ndarray, step_h: int, roff_path: Path) ->
     return nt
 
 
-def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
-               const_mann: float, nodata_lc, mann_path: Path,
-               channel_facc_tif: Path = None, channel_km2: float = None,
-               cell_area_m2: float = None, channel_n: float = None,
-               waterbody_mask_tif: Path = None, water_n: float = None) -> int:
+def write_mann(
+    lc_tif: Path,
+    dem_grid: Dict,
+    lut: Dict[int, float],
+    const_mann: float,
+    nodata_lc,
+    mann_path: Path,
+    channel_facc_tif: Path = None,
+    channel_km2: float = None,
+    cell_area_m2: float = None,
+    channel_n: float = None,
+    waterbody_mask_tif: Path = None,
+    water_n: float = None,
+) -> int:
     """Write the per-cell Manning grid [-] aligned to the DEM (headerless).
 
     Land-cover codes on the DEM grid are mapped to their RAT roughness; nodata
@@ -131,8 +157,13 @@ def write_mann(lc_tif: Path, dem_grid: Dict, lut: Dict[int, float],
     # GeoTIFF mirror aligned to the DEM grid, for manual inspection
     cs = dem_grid["cellsize"]
     tif = gdal.GetDriverByName("GTiff").Create(
-        f"{mann_path}.tif", ncols, nrows, 1, gdal.GDT_Float32,
-        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+        f"{mann_path}.tif",
+        ncols,
+        nrows,
+        1,
+        gdal.GDT_Float32,
+        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
+    )
     tif.SetGeoTransform((dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs))
     tif.SetProjection(gdal.Open(str(dem_grid["tif"])).GetProjection())
     tband = tif.GetRasterBand(1)
@@ -180,19 +211,39 @@ def _series_stats(a: np.ndarray) -> Dict[str, float]:
     """min/mean/median/p90/max over a 1-D array (empty -> zeros)."""
     if a.size == 0:
         return {"n": 0, "min": 0.0, "mean": 0.0, "median": 0.0, "p90": 0.0, "max": 0.0}
-    return {"n": int(a.size), "min": float(a.min()), "mean": float(a.mean()),
-            "median": float(np.median(a)), "p90": float(np.percentile(a, 90)),
-            "max": float(a.max())}
+    return {
+        "n": int(a.size),
+        "min": float(a.min()),
+        "mean": float(a.mean()),
+        "median": float(np.median(a)),
+        "p90": float(np.percentile(a, 90)),
+        "max": float(a.max()),
+    }
 
 
-def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
-                             fdir_tif: Path, lc_tif: Path, mann_lut: Dict[int, float],
-                             const_mann: float, qb_rate: np.ndarray,
-                             ix1: np.ndarray, iy1: np.ndarray, l0_cell_area_m2: float,
-                             channel_km2: float, width_a: float, width_b: float,
-                             slope_min: float, h_path: Path, qx_path: Path,
-                             qy_path: Path, do_fill: bool = True,
-                             fill_max_h: float = 5.0, min_h: float = 0.0) -> Dict:
+def write_initial_conditions(
+    dem_grid: Dict,
+    facc_tif: Path,
+    slope_tif: Path,
+    fdir_tif: Path,
+    lc_tif: Path,
+    mann_lut: Dict[int, float],
+    const_mann: float,
+    qb_rate: np.ndarray,
+    ix1: np.ndarray,
+    iy1: np.ndarray,
+    l0_cell_area_m2: float,
+    channel_km2: float,
+    width_a: float,
+    width_b: float,
+    slope_min: float,
+    h_path: Path,
+    qx_path: Path,
+    qy_path: Path,
+    do_fill: bool = True,
+    fill_max_h: float = 5.0,
+    min_h: float = 0.0,
+) -> Dict:
     """Seed initial depth/discharge from mHM baseflow, then fill the DEM channel storage.
 
     For every channel cell (drainage area >= *channel_km2*) the accumulated
@@ -233,10 +284,18 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
     dem = dsdem.GetRasterBand(1).ReadAsArray().astype(np.float64)
     prj = dsdem.GetProjection()
     dsdem = None
-    dsf = gdal.Open(str(facc_tif)); facc = dsf.GetRasterBand(1).ReadAsArray().astype(np.float64); dsf = None
-    dss = gdal.Open(str(slope_tif)); slope = dss.GetRasterBand(1).ReadAsArray().astype(np.float64); dss = None
-    dsd = gdal.Open(str(fdir_tif)); fdir = dsd.GetRasterBand(1).ReadAsArray(); dsd = None
-    dsl = gdal.Open(str(lc_tif)); lc = dsl.GetRasterBand(1).ReadAsArray().astype(np.int64); dsl = None
+    dsf = gdal.Open(str(facc_tif))
+    facc = dsf.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    dsf = None
+    dss = gdal.Open(str(slope_tif))
+    slope = dss.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    dss = None
+    dsd = gdal.Open(str(fdir_tif))
+    fdir = dsd.GetRasterBand(1).ReadAsArray()
+    dsd = None
+    dsl = gdal.Open(str(lc_tif))
+    lc = dsl.GetRasterBand(1).ReadAsArray().astype(np.int64)
+    dsl = None
 
     valid_dem = np.isfinite(dem) & (dem != NODATA)
 
@@ -250,20 +309,27 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
 
     a_m2 = facc * l0_cell_area_m2
     a_km2 = a_m2 / 1e6
-    seed = ((facc > NODATA + 1) & (slope > NODATA + 1) &
-            (a_km2 >= channel_km2) & (qbrow > 0) & valid_dem)
+    seed = (
+        (facc > NODATA + 1)
+        & (slope > NODATA + 1)
+        & (a_km2 >= channel_km2)
+        & (qbrow > 0)
+        & valid_dem
+    )
 
     h = np.zeros((nrows, ncols), dtype=np.float64)
-    qx = np.zeros((nrows, ncols), dtype=np.float64)  # seed velocities (later filled over the h mask)
+    qx = np.zeros(
+        (nrows, ncols), dtype=np.float64
+    )  # seed velocities (later filled over the h mask)
     qy = np.zeros((nrows, ncols), dtype=np.float64)
 
     if seed.any():
-        qb = qbrow[seed] * a_m2[seed]                          # m3 s-1
+        qb = qbrow[seed] * a_m2[seed]  # m3 s-1
         w = np.maximum(width_a * np.power(a_km2[seed], width_b), 1e-3)
         s = np.maximum(np.tan(np.radians(slope[seed])), slope_min)
         nch = ntab[np.clip(lc[seed], 0, maxcode)]
         hc = np.power(nch * qb / (w * np.sqrt(s)), 0.6)
-        q_unit = qb / w                                        # m2 s-1
+        q_unit = qb / w  # m2 s-1
         code = np.clip(fdir[seed].astype(np.int64), 0, 128)
         h[seed] = hc
         qx[seed] = q_unit * d8x[code]
@@ -286,7 +352,7 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
         while heap:
             negW, r, c = heapq.heappop(heap)
             W = -negW
-            if wse[r, c] > W:                                  # stale (lower) entry
+            if wse[r, c] > W:  # stale (lower) entry
                 continue
             for dr, dc in neigh:
                 nr, nc = r + dr, c + dc
@@ -295,9 +361,9 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
                 if not valid_dem[nr, nc]:
                     continue
                 dn = dem[nr, nc]
-                if dn >= W or (W - dn) > fill_max_h:            # rim reached / depth cap
+                if dn >= W or (W - dn) > fill_max_h:  # rim reached / depth cap
                     continue
-                if wse[nr, nc] >= W:                           # already at >= this level
+                if wse[nr, nc] >= W:  # already at >= this level
                     continue
                 wse[nr, nc] = W
                 heapq.heappush(heap, (-W, nr, nc))
@@ -328,27 +394,39 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
     # the wet cells and qx/qy are zero wherever h is dry (their own axis-aligned zeros
     # inside the wet area are physical and expected).
     dry = ~wet
-    assert np.array_equal(h != 0.0, wet), "init h nonzero footprint disagrees with the wet mask"
-    assert not qx[dry].any() and not qy[dry].any(), "init qx/qy are nonzero on h-dry cells"
+    assert np.array_equal(h != 0.0, wet), (
+        "init h nonzero footprint disagrees with the wet mask"
+    )
+    assert not qx[dry].any() and not qy[dry].any(), (
+        "init qx/qy are nonzero on h-dry cells"
+    )
 
     # GeoTIFF mirrors aligned to the DEM grid, for manual inspection (0 = dry).
     gt = (dem_grid["x0"], cs, 0.0, dem_grid["y0"], 0.0, -cs)
     drv = gdal.GetDriverByName("GTiff")
     co = ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"]
-    tifs = {"h": Path(f"{h_path}.tif"), "qx": Path(f"{qx_path}.tif"), "qy": Path(f"{qy_path}.tif")}
+    tifs = {
+        "h": Path(f"{h_path}.tif"),
+        "qx": Path(f"{qx_path}.tif"),
+        "qy": Path(f"{qy_path}.tif"),
+    }
 
     def _write_tif(path: Path, arr: np.ndarray) -> None:
         d = drv.Create(str(path), ncols, nrows, 1, gdal.GDT_Float32, co)
-        d.SetGeoTransform(gt); d.SetProjection(prj)
+        d.SetGeoTransform(gt)
+        d.SetProjection(prj)
         d.GetRasterBand(1).SetNoDataValue(0.0)
         d.GetRasterBand(1).WriteArray(arr.astype(np.float32))
         d.FlushCache()
 
     with open(h_path, "w") as fh, open(qx_path, "w") as fqx, open(qy_path, "w") as fqy:
         for j in range(nrows):
-            fh.write(" ".join(np.char.mod("%.4f", h[j]).tolist())); fh.write("\n")
-            fqx.write(" ".join(np.char.mod("%.6g", qx[j]).tolist())); fqx.write("\n")
-            fqy.write(" ".join(np.char.mod("%.6g", qy[j]).tolist())); fqy.write("\n")
+            fh.write(" ".join(np.char.mod("%.4f", h[j]).tolist()))
+            fh.write("\n")
+            fqx.write(" ".join(np.char.mod("%.6g", qx[j]).tolist()))
+            fqx.write("\n")
+            fqy.write(" ".join(np.char.mod("%.6g", qy[j]).tolist()))
+            fqy.write("\n")
     _write_tif(tifs["h"], h)
     _write_tif(tifs["qx"], qx)
     _write_tif(tifs["qy"], qy)
@@ -365,19 +443,21 @@ def write_initial_conditions(dem_grid: Dict, facc_tif: Path, slope_tif: Path,
     }
 
 
-def write_cfg(cfg_path: Path,
-              names: Dict[str, str],
-              projection: str,
-              num_runoffs: int,
-              runoff_rows: int,
-              sim_duration_s: int,
-              mapping_interval_s: int,
-              obs_interval_s: int,
-              const_mann: float,
-              decomp_factor: int = 10,
-              decomp_type: str = "static",
-              courant: float = 0.5,
-              init_names: Optional[Dict[str, str]] = None) -> None:
+def write_cfg(
+    cfg_path: Path,
+    names: Dict[str, str],
+    projection: str,
+    num_runoffs: int,
+    runoff_rows: int,
+    sim_duration_s: int,
+    mapping_interval_s: int,
+    obs_interval_s: int,
+    const_mann: float,
+    decomp_factor: int = 10,
+    decomp_type: str = "static",
+    courant: float = 0.5,
+    init_names: Optional[Dict[str, str]] = None,
+) -> None:
     """Write the TRITON configuration tying the generated inputs together."""
     rel = lambda key: f"input/{names['domain']}/{names[key]}"
     ic = init_names or {}
@@ -417,7 +497,7 @@ def write_cfg(cfg_path: Path,
         "# Observation points (mHM gauges)",
         "time_series_flag=1",
         f'observation_loc_file="{rel("obs")}"',
-        f'print_observation={obs_interval_s}',
+        f"print_observation={obs_interval_s}",
         "",
         "# Initial conditions (mHM pre-event baseflow warm start)",
         f'h_infile="{h_file}"',

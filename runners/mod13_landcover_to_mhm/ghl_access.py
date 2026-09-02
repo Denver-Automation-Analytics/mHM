@@ -11,6 +11,7 @@ import zarr
 
 log = logging.getLogger(__name__)
 
+
 def open_ghl(repo_name: str, ref: str = "main") -> xr.Dataset:
     """
     Open the GHL Icechunk repo (subscription mirror) via Arraylake.
@@ -37,22 +38,22 @@ def open_ghl(repo_name: str, ref: str = "main") -> xr.Dataset:
         reproducible production runs.
     """
 
-    client  = Client()
-    repo    = client.get_repo(repo_name)
+    client = Client()
+    repo = client.get_repo(repo_name)
     session = repo.readonly_session(branch=ref)
-    store   = session.store
+    store = session.store
 
     # Sanity: open with zarr first so we surface any v3 metadata issues clearly
     # and can log the group hierarchy before xarray reads it.
     root = zarr.open_group(store, zarr_format=3, mode="r")
-    log.info("Opened %s @ %s; top-level arrays: %s",
-             repo_name, ref, list(root.array_keys()))
+    log.info(
+        "Opened %s @ %s; top-level arrays: %s", repo_name, ref, list(root.array_keys())
+    )
     log.info("Top-level groups: %s", list(root.group_keys()))
 
     # xarray consumes the same Icechunk-backed store
     ds = xr.open_zarr(store, zarr_format=3, consolidated=False)
-    log.info("Dataset dims: %s | vars: %s",
-             dict(ds.sizes), list(ds.data_vars))
+    log.info("Dataset dims: %s | vars: %s", dict(ds.sizes), list(ds.data_vars))
     return ds
 
 
@@ -67,9 +68,9 @@ def detect_class_var(ds: xr.Dataset) -> str:
     """
     spatial_dims = {"y", "x", "lat", "lon", "latitude", "longitude"}
     candidates = [
-        v for v in ds.data_vars
-        if np.issubdtype(ds[v].dtype, np.integer)
-        and set(ds[v].dims) & spatial_dims
+        v
+        for v in ds.data_vars
+        if np.issubdtype(ds[v].dtype, np.integer) and set(ds[v].dims) & spatial_dims
     ]
     if not candidates:
         raise RuntimeError(
@@ -84,9 +85,7 @@ def detect_class_var(ds: xr.Dataset) -> str:
     return chosen
 
 
-def select_scene(ds: xr.Dataset,
-                 var_name: str,
-                 year: Optional[int]) -> xr.DataArray:
+def select_scene(ds: xr.Dataset, var_name: str, year: Optional[int]) -> xr.DataArray:
     """
     Return a single-scene DataArray for `year`.
 

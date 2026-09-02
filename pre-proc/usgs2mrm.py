@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from __future__ import print_function
+
 """
 usage: usgs2mrm.py [-h] [-c 1] [-l headerlines] [-u usgsidline] [-o outfile] [infile]
 
@@ -48,56 +49,72 @@ Written,  Stephan Thober, Oct 2015
 Modified,
          
 """
-if __name__ == '__main__':
+if __name__ == "__main__":
     from re import search
     from sys import stdout
 
     convert = 1
-    infile = ''
-    outfile = ''
+    infile = ""
+    outfile = ""
     headlines = 28
     usgsIDline = 14
-    nodata = -9999.
+    nodata = -9999.0
     # obtain arguments
     from argparse import ArgumentParser, RawDescriptionHelpFormatter
-    outfile = ''
-    parser  = ArgumentParser(
-    formatter_class = RawDescriptionHelpFormatter,
-        description = '''This is the Python script to convert tab-separated discharge values from usgs (for example,
+
+    outfile = ""
+    parser = ArgumentParser(
+        formatter_class=RawDescriptionHelpFormatter,
+        description="""This is the Python script to convert tab-separated discharge values from usgs (for example,
 obtained from http://waterdata.usgs.gov/nwis) to mRM discharge files. Values can also be
 converted from [ft3 s-1] to [m3 s-1]. If a value is missing, nodata value -9999 will be
 used. If the flag by USGS is indicating that the data is not approved, a warning for this
 timestep is going to be issued, but the values are used nevertheless.
-''')
-    parser.add_argument('-c', '--convert',
-                        action = 'store',
-                        default = convert,
-                        dest = 'convert',
-                        metavar = 'convert',
-                        help = "convert from ft to m (1 - yes (default), 0 - no)")
-    parser.add_argument('-l', '--headerline',
-                        action = 'store',
-                        default = headlines,
-                        dest = 'headlines',
-                        metavar = 'headlines',
-                        help = "number of header lines in input file")
-    parser.add_argument('-u', '--usgsidline',
-                        action = 'store',
-                        default = usgsIDline,
-                        dest = 'usgsIDline',
-                        metavar = 'usgsIDline',
-                        help = "line containing the USGS ID")
-    parser.add_argument('-o', '--outfile',
-                        action = 'store',
-                        default = outfile,
-                        dest = 'outfile',
-                        metavar = 'outfile',
-                        help = "output file, if not given, output is written to standard out")
-    parser.add_argument('file',
-                        nargs = '?',
-                        default = None,
-                        metavar = 'infile',
-                        help = 'Mandatory input file containing the lat lon coordinates')
+""",
+    )
+    parser.add_argument(
+        "-c",
+        "--convert",
+        action="store",
+        default=convert,
+        dest="convert",
+        metavar="convert",
+        help="convert from ft to m (1 - yes (default), 0 - no)",
+    )
+    parser.add_argument(
+        "-l",
+        "--headerline",
+        action="store",
+        default=headlines,
+        dest="headlines",
+        metavar="headlines",
+        help="number of header lines in input file",
+    )
+    parser.add_argument(
+        "-u",
+        "--usgsidline",
+        action="store",
+        default=usgsIDline,
+        dest="usgsIDline",
+        metavar="usgsIDline",
+        help="line containing the USGS ID",
+    )
+    parser.add_argument(
+        "-o",
+        "--outfile",
+        action="store",
+        default=outfile,
+        dest="outfile",
+        metavar="outfile",
+        help="output file, if not given, output is written to standard out",
+    )
+    parser.add_argument(
+        "file",
+        nargs="?",
+        default=None,
+        metavar="infile",
+        help="Mandatory input file containing the lat lon coordinates",
+    )
     args = parser.parse_args()
     convert = args.convert
     headlines = args.headlines
@@ -108,51 +125,51 @@ timestep is going to be issued, but the values are used nevertheless.
 
     # factor for convert ft^3 in mm^3
     if int(convert) == 1:
-        ft2m = 0.3048 # one ft is 0.3048 m
+        ft2m = 0.3048  # one ft is 0.3048 m
     else:
-        ft2m = 1.
+        ft2m = 1.0
 
     # read file
-    fi = open(infile, 'r')
+    fi = open(infile, "r")
     indata = fi.readlines()
     fi.close()
 
     # get usgs ID from indata
-    usgsid = search('[0-9]{8}', indata[usgsIDline]).group()
+    usgsid = search("[0-9]{8}", indata[usgsIDline]).group()
 
     # create arrays
     Ndata = len(indata) - headlines
-    # create list for dates 
+    # create list for dates
     date = list()
     # create array for measurements
     value = [0.0] * Ndata
 
     # read value and date
     for ii in range(Ndata):
-        readStr = indata[headlines + ii].split('\t')
-        if readStr[-1] != 'A\n':
-            print('***Warning: value at date ' + readStr[2] + ' is not approved!')
-        date.append(readStr[2].replace('-', '  '))
-        if readStr[3] == '':
+        readStr = indata[headlines + ii].split("\t")
+        if readStr[-1] != "A\n":
+            print("***Warning: value at date " + readStr[2] + " is not approved!")
+        date.append(readStr[2].replace("-", "  "))
+        if readStr[3] == "":
             value[ii] = nodata
         else:
             value[ii] = float(readStr[3]) * ft2m
 
     # open standard out
-    if outfile != '':
-        fo = open(outfile, 'w')
+    if outfile != "":
+        fo = open(outfile, "w")
     else:
         fo = stdout
     # write header
-    fo.write(usgsid + ' Gauge 1 (daily discharge)\n')
-    fo.write('nodata{:11.3f}\n'.format(nodata))
-    fo.write('n       1       measurements per day [1, ' + str(Ndata) + ']\n')
-    fo.write('start  ' + date[0] + ' 00 00   (YYYY MM DD HH MM)\n')
-    fo.write('end    ' + date[-1] + ' 00 00   (YYYY MM DD HH MM)\n')
+    fo.write(usgsid + " Gauge 1 (daily discharge)\n")
+    fo.write("nodata{:11.3f}\n".format(nodata))
+    fo.write("n       1       measurements per day [1, " + str(Ndata) + "]\n")
+    fo.write("start  " + date[0] + " 00 00   (YYYY MM DD HH MM)\n")
+    fo.write("end    " + date[-1] + " 00 00   (YYYY MM DD HH MM)\n")
     # write data
     for ii in range(Ndata):
-        writeStr = date[ii] + '  00  00{:11.3f}\n'.format(value[ii])
+        writeStr = date[ii] + "  00  00{:11.3f}\n".format(value[ii])
         fo.write(writeStr)
-    if outfile != '':
+    if outfile != "":
         fo.close()
-    print('Done!')
+    print("Done!")

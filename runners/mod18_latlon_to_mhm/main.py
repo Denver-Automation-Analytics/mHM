@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import L1_CELL_SIZE_M, WORKING_DIR, OUTPUT_CRS  # noqa: E402
 
 # ---- USER INPUTS --------------------------------------------------
-L0_HEADER   = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
-OUTPUT_DIR  = os.path.join(WORKING_DIR, "mhm_input", "latlon")
+L0_HEADER = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
+OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input", "latlon")
 # -------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -36,15 +36,13 @@ log = logging.getLogger("latlon_to_mhm")
 def _require(path: str, module: str) -> Path:
     p = Path(path)
     if not p.is_file():
-        raise FileNotFoundError(
-            f"{p} not found — run {module} first."
-        )
+        raise FileNotFoundError(f"{p} not found — run {module} first.")
     return p
 
 
 if __name__ == "__main__":
-    l0  = _require(L0_HEADER,  "mod10_dem_to_mhm")
-    l1  = derive_l_header(l0, L1_CELL_SIZE_M)
+    l0 = _require(L0_HEADER, "mod10_dem_to_mhm")
+    l1 = derive_l_header(l0, L1_CELL_SIZE_M)
     l11 = l1
 
     out_root = Path(OUTPUT_DIR)
@@ -52,10 +50,10 @@ if __name__ == "__main__":
     out_file = out_root / "latlon.nc"
 
     create_latlon(
-        out_file   = out_file,
-        coord_sys  = OUTPUT_CRS,
-        header_l0  = l0,
-        header_l1  = l1,
-        header_l11 = l11,
+        out_file=out_file,
+        coord_sys=OUTPUT_CRS,
+        header_l0=l0,
+        header_l1=l1,
+        header_l11=l11,
     )
     log.info("Written: %s", out_file)

@@ -12,6 +12,7 @@ that drive the TRITON 2D hydraulic model:
 Run order: mod10 (DEM) + mod15 (gauges) + an mHM run producing gridded Q -> mod22.
 The Manning field (.mann) is intentionally not generated yet.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,24 +22,45 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import (NODATA, OUTPUT_CRS, TIMESTEP, TRITON_HYDROGRAPH_INTERVAL_S, WORKING_DIR,
-                    IO_MANNING_N,
-                    TRITON_BF_CHANNEL_KM2, TRITON_BF_SLOPE_MIN, TRITON_BF_WIDTH_A,
-                    TRITON_BF_WIDTH_B, TRITON_CHANNEL_MANN, TRITON_CONST_MANN,
-                    TRITON_DECOMP_FACTOR,
-                    TRITON_DECOMP_TYPE,
-                    TRITON_COURANT,
-                    TRITON_AUTO_START, TRITON_ONSET_MM_HR, TRITON_START_FILE,
-                    TRITON_DEM_CELLSIZE_M, TRITON_DOMAIN_NAME, TRITON_END_DATE,
-                    TRITON_INIT_FILL, TRITON_INIT_FILL_MAX_H,
-                    TRITON_IO_LULC_PATH, TRITON_IO_LULC_YEAR,
-                    TRITON_MAP_HMIN,
-                    TRITON_OUT_DIR,
-                    TRITON_MAPPING_INTERVAL_S, TRITON_PROJECTION, TRITON_START_DATE,
-                    TRITON_WARM_START,
-                    TRITON_WATERBODIES, TRITON_WATERBODY_LAYER_ID,
-                    TRITON_WATERBODY_EXCLUDE_FTYPES, TRITON_WATERBODY_LAKEPOND_STAGE,
-                    TRITON_WATERBODY_PATH, TRITON_WATERBODY_SERVICE_URL)
+from config import (
+    NODATA,
+    OUTPUT_CRS,
+    TIMESTEP,
+    TRITON_HYDROGRAPH_INTERVAL_S,
+    WORKING_DIR,
+    IO_MANNING_N,
+    TRITON_BF_CHANNEL_KM2,
+    TRITON_BF_SLOPE_MIN,
+    TRITON_BF_WIDTH_A,
+    TRITON_BF_WIDTH_B,
+    TRITON_CHANNEL_MANN,
+    TRITON_CONST_MANN,
+    TRITON_DECOMP_FACTOR,
+    TRITON_DECOMP_TYPE,
+    TRITON_COURANT,
+    TRITON_AUTO_START,
+    TRITON_ONSET_MM_HR,
+    TRITON_START_FILE,
+    TRITON_DEM_CELLSIZE_M,
+    TRITON_DOMAIN_NAME,
+    TRITON_END_DATE,
+    TRITON_INIT_FILL,
+    TRITON_INIT_FILL_MAX_H,
+    TRITON_IO_LULC_PATH,
+    TRITON_IO_LULC_YEAR,
+    TRITON_MAP_HMIN,
+    TRITON_OUT_DIR,
+    TRITON_MAPPING_INTERVAL_S,
+    TRITON_PROJECTION,
+    TRITON_START_DATE,
+    TRITON_WARM_START,
+    TRITON_WATERBODIES,
+    TRITON_WATERBODY_LAYER_ID,
+    TRITON_WATERBODY_EXCLUDE_FTYPES,
+    TRITON_WATERBODY_LAKEPOND_STAGE,
+    TRITON_WATERBODY_PATH,
+    TRITON_WATERBODY_SERVICE_URL,
+)
 
 from osgeo import gdal
 
@@ -57,18 +79,47 @@ log = logging.getLogger("mhm_to_triton")
 
 WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input", "domain", "watershed.geojson")
 if not os.path.exists(WATERSHED_FILE):
-    raise FileNotFoundError(f"Watershed file not found: {WATERSHED_FILE}. Run mod10 first to generate it.")
+    raise FileNotFoundError(
+        f"Watershed file not found: {WATERSHED_FILE}. Run mod10 first to generate it."
+    )
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate TRITON inputs from mHM/mRM data.")
     p.add_argument("--work-dir", default=WORKING_DIR, help="mHM domain directory")
-    p.add_argument("--out-dir", default=TRITON_OUT_DIR, help="output directory for TRITON inputs")
-    p.add_argument("--name", default=TRITON_DOMAIN_NAME, help="basename for the TRITON files")
-    p.add_argument("--cellsize", type=float, default=TRITON_DEM_CELLSIZE_M, help="TRITON grid resolution [m]")
-    p.add_argument("--timestep", default=TIMESTEP, choices=["daily", "hourly"], help="mHM output cadence")
-    p.add_argument("--start-date", default=TRITON_START_DATE, help="event-window start 'YYYY-MM-DD' (subset the runoff)")
-    p.add_argument("--end-date", default=TRITON_END_DATE, help="event-window end 'YYYY-MM-DD' (inclusive)")
-    p.add_argument("--force", action="store_true", help="regenerate outputs even if they already exist")
+    p.add_argument(
+        "--out-dir", default=TRITON_OUT_DIR, help="output directory for TRITON inputs"
+    )
+    p.add_argument(
+        "--name", default=TRITON_DOMAIN_NAME, help="basename for the TRITON files"
+    )
+    p.add_argument(
+        "--cellsize",
+        type=float,
+        default=TRITON_DEM_CELLSIZE_M,
+        help="TRITON grid resolution [m]",
+    )
+    p.add_argument(
+        "--timestep",
+        default=TIMESTEP,
+        choices=["daily", "hourly"],
+        help="mHM output cadence",
+    )
+    p.add_argument(
+        "--start-date",
+        default=TRITON_START_DATE,
+        help="event-window start 'YYYY-MM-DD' (subset the runoff)",
+    )
+    p.add_argument(
+        "--end-date",
+        default=TRITON_END_DATE,
+        help="event-window end 'YYYY-MM-DD' (inclusive)",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="regenerate outputs even if they already exist",
+    )
     return p.parse_args()
 
 
@@ -102,26 +153,43 @@ def main() -> int:
     step_h = readers.step_hours(args.timestep)
     log.info("Reading mHM runoff cube: %s", flux_nc)
     runoff = readers.read_runoff(flux_nc, start=args.start_date, end=args.end_date)
-    log.info("Runoff units=%r, %d steps (%s..%s), L1 %dx%d @ %.0f m",
-             runoff["units"], runoff["time"].size,
-             str(runoff["time"][0])[:10], str(runoff["time"][-1])[:10],
-             runoff["easting"].size, runoff["northing"].size, runoff["cellsize"])
+    log.info(
+        "Runoff units=%r, %d steps (%s..%s), L1 %dx%d @ %.0f m",
+        runoff["units"],
+        runoff["time"].size,
+        str(runoff["time"][0])[:10],
+        str(runoff["time"][-1])[:10],
+        runoff["easting"].size,
+        runoff["northing"].size,
+        runoff["cellsize"],
+    )
 
     # Auto start: drop the pre-event steps so TRITON only simulates from one mHM
     # step before runoff onset (dry/baseflow-only steps are wasted computation).
     if TRITON_AUTO_START:
         oi = readers.runoff_onset_index(runoff, step_h, TRITON_ONSET_MM_HR)
         if oi is None:
-            log.warning("Runoff never reaches onset threshold %.3f mm/hr in the window; keeping start %s.",
-                        TRITON_ONSET_MM_HR, str(runoff["time"][0])[:16])
+            log.warning(
+                "Runoff never reaches onset threshold %.3f mm/hr in the window; keeping start %s.",
+                TRITON_ONSET_MM_HR,
+                str(runoff["time"][0])[:16],
+            )
         elif oi <= 1:
-            log.info("Runoff onset at/near window start; no trimming (start %s).", str(runoff["time"][0])[:16])
+            log.info(
+                "Runoff onset at/near window start; no trimming (start %s).",
+                str(runoff["time"][0])[:16],
+            )
         else:
             si = oi - 1  # exactly one step before the driver begins
             onset_t = runoff["time"][oi]
             runoff = readers.trim_runoff(runoff, si)
-            log.info("Auto start: runoff onset (>=%.3f mm/hr) at %s -> sim start one step earlier at %s (skipped %d step(s))",
-                     TRITON_ONSET_MM_HR, str(onset_t)[:16], str(runoff["time"][0])[:16], si)
+            log.info(
+                "Auto start: runoff onset (>=%.3f mm/hr) at %s -> sim start one step earlier at %s (skipped %d step(s))",
+                TRITON_ONSET_MM_HR,
+                str(onset_t)[:16],
+                str(runoff["time"][0])[:16],
+                si,
+            )
     eff_start = str(runoff["time"][0].isoformat())
     Path(TRITON_START_FILE).parent.mkdir(parents=True, exist_ok=True)
     Path(TRITON_START_FILE).write_text(eff_start + "\n")
@@ -132,21 +200,33 @@ def main() -> int:
         dem_grid = gridmod.read_grid(warped_tif)
     else:
         log.info("Reprojecting/clipping DEM to %s @ %.0f m", OUTPUT_CRS, args.cellsize)
-        dem_grid = gridmod.warp_dem(src_dem, Path(WATERSHED_FILE), OUTPUT_CRS, args.cellsize, warped_tif)
-    log.info("TRITON grid: %d x %d = %.1fM cells @ %.0f m",
-             dem_grid["ncols"], dem_grid["nrows"],
-             dem_grid["ncols"] * dem_grid["nrows"] / 1e6, dem_grid["cellsize"])
+        dem_grid = gridmod.warp_dem(
+            src_dem, Path(WATERSHED_FILE), OUTPUT_CRS, args.cellsize, warped_tif
+        )
+    log.info(
+        "TRITON grid: %d x %d = %.1fM cells @ %.0f m",
+        dem_grid["ncols"],
+        dem_grid["nrows"],
+        dem_grid["ncols"] * dem_grid["nrows"] / 1e6,
+        dem_grid["cellsize"],
+    )
 
     zone_ids, valid, n_zones = gridmod.build_zones(runoff)
     ix1, iy1 = gridmod.dem_axis_to_l1(dem_grid, runoff)
     n_rows = runoff["time"].size
     # zone 0 is the reserved no-runoff zone for off-watershed cells; the N L1 zones are 1..N
     num_runoffs = n_zones + 1
-    log.info("Runoff zones: %d L1 + 1 reserved zero-zone (num_runoffs=%d)", n_zones, num_runoffs)
+    log.info(
+        "Runoff zones: %d L1 + 1 reserved zero-zone (num_runoffs=%d)",
+        n_zones,
+        num_runoffs,
+    )
 
     if not (skip("dem") and skip("rmap")):
         log.info("Writing DEM + runoff map ...")
-        writers.write_dem_and_rmap(dem_grid, zone_ids, ix1, iy1, paths["dem"], paths["rmap"])
+        writers.write_dem_and_rmap(
+            dem_grid, zone_ids, ix1, iy1, paths["dem"], paths["rmap"]
+        )
 
     if not skip("roff"):
         log.info("Writing runoff time series ...")
@@ -158,7 +238,7 @@ def main() -> int:
         n_obs = writers.write_obs(gauges, paths["obs"])
     log.info("Observation point(s): %d", n_obs)
 
-    facc_hi = work / "mhm_input" / "dem" / "facc.tif"   # full-resolution routing (mod10)
+    facc_hi = work / "mhm_input" / "dem" / "facc.tif"  # full-resolution routing (mod10)
     fdir_hi = work / "mhm_input" / "dem" / "fdir.tif"
     lc_cache: dict = {}
     facc_g_cache: dict = {}
@@ -170,14 +250,25 @@ def main() -> int:
             src = Path(TRITON_IO_LULC_PATH)
             if not src.exists() or args.force:
                 log.info("Acquiring ESRI/IO 10 m land cover -> %s", src)
-                esri_lulc.acquire(Path(WATERSHED_FILE), OUTPUT_CRS, src,
-                                  year=TRITON_IO_LULC_YEAR, resolution=TRITON_DEM_CELLSIZE_M)
+                esri_lulc.acquire(
+                    Path(WATERSHED_FILE),
+                    OUTPUT_CRS,
+                    src,
+                    year=TRITON_IO_LULC_YEAR,
+                    resolution=TRITON_DEM_CELLSIZE_M,
+                )
             lut, nod = readers.read_manning_lookup(src, IO_MANNING_N)
             lc_tif = out / f"{name}_lc_{epsg}.tif"
             if not lc_tif.exists() or args.force:
-                gridmod.warp_to_dem_grid(src, Path(WATERSHED_FILE),
-                                         OUTPUT_CRS, dem_grid, lc_tif, resample="near",
-                                         dst_nodata=nod if nod is not None else -128)
+                gridmod.warp_to_dem_grid(
+                    src,
+                    Path(WATERSHED_FILE),
+                    OUTPUT_CRS,
+                    dem_grid,
+                    lc_tif,
+                    resample="near",
+                    dst_nodata=nod if nod is not None else -128,
+                )
             lc_cache.update(lut=lut, nod=nod, tif=lc_tif)
         return lc_cache
 
@@ -186,8 +277,15 @@ def main() -> int:
         if not facc_g_cache:
             fg = out / f"{name}_facc_{epsg}.tif"
             if not fg.exists() or args.force:
-                gridmod.warp_to_dem_grid(facc_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
-                                         dem_grid, fg, resample="near", dst_nodata=NODATA)
+                gridmod.warp_to_dem_grid(
+                    facc_hi,
+                    Path(WATERSHED_FILE),
+                    OUTPUT_CRS,
+                    dem_grid,
+                    fg,
+                    resample="near",
+                    dst_nodata=NODATA,
+                )
             facc_g_cache.update(path=fg, cell_area=gridmod.pixel_area_m2(facc_hi))
         return facc_g_cache
 
@@ -197,10 +295,15 @@ def main() -> int:
             vec = Path(TRITON_WATERBODY_PATH)
             if not vec.exists() or args.force:
                 log.info("Acquiring NHDPlus HR waterbodies -> %s", vec)
-                nhd_waterbodies.acquire(Path(WATERSHED_FILE), OUTPUT_CRS, vec,
-                                        TRITON_WATERBODY_SERVICE_URL, TRITON_WATERBODY_LAYER_ID,
-                                        exclude_ftypes=TRITON_WATERBODY_EXCLUDE_FTYPES,
-                                        lakepond_stage=TRITON_WATERBODY_LAKEPOND_STAGE)
+                nhd_waterbodies.acquire(
+                    Path(WATERSHED_FILE),
+                    OUTPUT_CRS,
+                    vec,
+                    TRITON_WATERBODY_SERVICE_URL,
+                    TRITON_WATERBODY_LAYER_ID,
+                    exclude_ftypes=TRITON_WATERBODY_EXCLUDE_FTYPES,
+                    lakepond_stage=TRITON_WATERBODY_LAKEPOND_STAGE,
+                )
             mask_tif = out / f"{name}_wb_{epsg}.tif"
             if not mask_tif.exists() or args.force:
                 gridmod.rasterize_waterbodies_to_dem_grid(vec, dem_grid, mask_tif)
@@ -211,8 +314,12 @@ def main() -> int:
     burn_channels = TRITON_CHANNEL_MANN is not None
     use_wb = TRITON_WATERBODIES
 
-    mann_tif = Path(f'{paths["mann"]}.tif')
-    mann_ready = paths["mann"].exists() and paths["mann"].stat().st_size > 0 and mann_tif.exists()
+    mann_tif = Path(f"{paths['mann']}.tif")
+    mann_ready = (
+        paths["mann"].exists()
+        and paths["mann"].stat().st_size > 0
+        and mann_tif.exists()
+    )
     if mann_ready and not args.force:
         log.info("Skip (exists): %s", paths["mann"].name)
     else:
@@ -221,90 +328,172 @@ def main() -> int:
         burn_kwargs: dict = {}
         if burn_channels:
             if not facc_hi.exists():
-                log.error("Channel roughness burn requires %s. Run mod10 to generate it.", facc_hi)
+                log.error(
+                    "Channel roughness burn requires %s. Run mod10 to generate it.",
+                    facc_hi,
+                )
                 return 1
             fg = ensure_facc_g()
-            burn_kwargs = dict(channel_facc_tif=fg["path"], channel_km2=TRITON_BF_CHANNEL_KM2,
-                               cell_area_m2=fg["cell_area"], channel_n=TRITON_CHANNEL_MANN)
+            burn_kwargs = dict(
+                channel_facc_tif=fg["path"],
+                channel_km2=TRITON_BF_CHANNEL_KM2,
+                cell_area_m2=fg["cell_area"],
+                channel_n=TRITON_CHANNEL_MANN,
+            )
         if use_wb:
-            burn_kwargs.update(waterbody_mask_tif=ensure_waterbodies()["mask"],
-                               water_n=TRITON_CHANNEL_MANN)
-        n_burn = writers.write_mann(lc["tif"], dem_grid, lc["lut"], TRITON_CONST_MANN,
-                                    lc["nod"], paths["mann"], **burn_kwargs)
+            burn_kwargs.update(
+                waterbody_mask_tif=ensure_waterbodies()["mask"],
+                water_n=TRITON_CHANNEL_MANN,
+            )
+        n_burn = writers.write_mann(
+            lc["tif"],
+            dem_grid,
+            lc["lut"],
+            TRITON_CONST_MANN,
+            lc["nod"],
+            paths["mann"],
+            **burn_kwargs,
+        )
         log.info("Manning GeoTIFF: %s", mann_tif.name)
         if burn_channels:
-            log.info("Burned channel roughness n=%.3f into %d cell(s) of %s",
-                     TRITON_CHANNEL_MANN, n_burn, paths["mann"].name)
+            log.info(
+                "Burned channel roughness n=%.3f into %d cell(s) of %s",
+                TRITON_CHANNEL_MANN,
+                n_burn,
+                paths["mann"].name,
+            )
 
     init_names = None
     if TRITON_WARM_START:
         ic_keys = ("inith", "initqx", "inityq")
-        ic_files = [paths[k] for k in ic_keys] + [Path(f"{paths[k]}.tif") for k in ic_keys]
+        ic_files = [paths[k] for k in ic_keys] + [
+            Path(f"{paths[k]}.tif") for k in ic_keys
+        ]
         ready = all(p.exists() and p.stat().st_size > 0 for p in ic_files)
         if ready and not args.force:
             for k in ic_keys:
                 log.info("Skip (exists): %s", paths[k].name)
         else:
             if not (facc_hi.exists() and fdir_hi.exists()):
-                log.error("Initial conditions require full-resolution routing rasters "
-                          "%s and %s. Run mod10 to generate them.", facc_hi, fdir_hi)
+                log.error(
+                    "Initial conditions require full-resolution routing rasters "
+                    "%s and %s. Run mod10 to generate them.",
+                    facc_hi,
+                    fdir_hi,
+                )
                 return 1
             log.info("Seeding channels from pre-event baseflow (Method A) ...")
             lc = ensure_lc()
             # slope at the TRITON resolution, derived from the reprojected DEM
             slope_g = out / f"{name}_slope_{epsg}.tif"
             if not slope_g.exists() or args.force:
-                gdal.DEMProcessing(str(slope_g), str(dem_grid["tif"]), "slope", slopeFormat="degree")
-            log.info("Using full-resolution fdir/facc from mhm_input/dem/ (reprojected to the TRITON grid)")
+                gdal.DEMProcessing(
+                    str(slope_g), str(dem_grid["tif"]), "slope", slopeFormat="degree"
+                )
+            log.info(
+                "Using full-resolution fdir/facc from mhm_input/dem/ (reprojected to the TRITON grid)"
+            )
             fg = ensure_facc_g()
             cell_area = fg["cell_area"]
             facc_g = fg["path"]
-            fdir_g = gridmod.warp_to_dem_grid(fdir_hi, Path(WATERSHED_FILE), OUTPUT_CRS,
-                        dem_grid, out / f"{name}_fdir_{epsg}.tif", resample="near", dst_nodata=0)
+            fdir_g = gridmod.warp_to_dem_grid(
+                fdir_hi,
+                Path(WATERSHED_FILE),
+                OUTPUT_CRS,
+                dem_grid,
+                out / f"{name}_fdir_{epsg}.tif",
+                resample="near",
+                dst_nodata=0,
+            )
             bf = readers.read_baseflow_preevent(flux_nc, start_date=eff_start)
-            log.info("Pre-event baseflow step: %s | source cell area %.1f m2", str(bf["time"])[:16], cell_area)
+            log.info(
+                "Pre-event baseflow step: %s | source cell area %.1f m2",
+                str(bf["time"])[:16],
+                cell_area,
+            )
             ic = writers.write_initial_conditions(
-                dem_grid, facc_g, Path(slope_g), fdir_g, lc["tif"], lc["lut"], TRITON_CONST_MANN,
-                bf["rate"], ix1, iy1, cell_area, TRITON_BF_CHANNEL_KM2,
-                TRITON_BF_WIDTH_A, TRITON_BF_WIDTH_B, TRITON_BF_SLOPE_MIN,
-                paths["inith"], paths["initqx"], paths["inityq"],
-                do_fill=TRITON_INIT_FILL, fill_max_h=TRITON_INIT_FILL_MAX_H,
-                min_h=TRITON_MAP_HMIN)
+                dem_grid,
+                facc_g,
+                Path(slope_g),
+                fdir_g,
+                lc["tif"],
+                lc["lut"],
+                TRITON_CONST_MANN,
+                bf["rate"],
+                ix1,
+                iy1,
+                cell_area,
+                TRITON_BF_CHANNEL_KM2,
+                TRITON_BF_WIDTH_A,
+                TRITON_BF_WIDTH_B,
+                TRITON_BF_SLOPE_MIN,
+                paths["inith"],
+                paths["initqx"],
+                paths["inityq"],
+                do_fill=TRITON_INIT_FILL,
+                fill_max_h=TRITON_INIT_FILL_MAX_H,
+                min_h=TRITON_MAP_HMIN,
+            )
             log.info("Initial-condition channel seed cells: %d", ic["n_chan"])
             if TRITON_INIT_FILL:
-                log.info("Filled channel-storage cells: %d (cap %.1f m)", ic["n_fill"], TRITON_INIT_FILL_MAX_H)
-            log.info("  depth h [m]      : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
-                     *(ic["depth_m"][s] for s in ("min", "mean", "median", "p90", "max")))
-            log.info("  unit q |q| [m2/s]: min=%.4f mean=%.4f median=%.4f p90=%.4f max=%.4f",
-                     *(ic["unit_q_m2s"][s] for s in ("min", "mean", "median", "p90", "max")))
-            log.info("  velocity [m/s]   : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
-                     *(ic["velocity_ms"][s] for s in ("min", "mean", "median", "p90", "max")))
+                log.info(
+                    "Filled channel-storage cells: %d (cap %.1f m)",
+                    ic["n_fill"],
+                    TRITON_INIT_FILL_MAX_H,
+                )
+            log.info(
+                "  depth h [m]      : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
+                *(ic["depth_m"][s] for s in ("min", "mean", "median", "p90", "max")),
+            )
+            log.info(
+                "  unit q |q| [m2/s]: min=%.4f mean=%.4f median=%.4f p90=%.4f max=%.4f",
+                *(ic["unit_q_m2s"][s] for s in ("min", "mean", "median", "p90", "max")),
+            )
+            log.info(
+                "  velocity [m/s]   : min=%.3f mean=%.3f median=%.3f p90=%.3f max=%.3f",
+                *(
+                    ic["velocity_ms"][s]
+                    for s in ("min", "mean", "median", "p90", "max")
+                ),
+            )
             log.info("  GeoTIFFs: %s", ", ".join(t.name for t in ic["tifs"].values()))
         if all(paths[k].exists() for k in ic_keys):
-            init_names = {"h": names["inith"], "qx": names["initqx"], "qy": names["inityq"]}
+            init_names = {
+                "h": names["inith"],
+                "qx": names["initqx"],
+                "qy": names["inityq"],
+            }
 
     sim_duration_s = int(n_rows * step_h * 3600)
     if not skip("cfg"):
-        writers.write_cfg(cfg_path=paths["cfg"],
-                          names=names,
-                          projection=TRITON_PROJECTION,
-                          num_runoffs=num_runoffs,
-                          runoff_rows=n_rows,
-                          sim_duration_s=sim_duration_s,
-                          mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
-                          obs_interval_s=TRITON_HYDROGRAPH_INTERVAL_S,
-                          const_mann=TRITON_CONST_MANN,
-                          decomp_factor=TRITON_DECOMP_FACTOR,
-                          decomp_type=TRITON_DECOMP_TYPE,
-                          courant=TRITON_COURANT,
-                          init_names=init_names,
-                          )
+        writers.write_cfg(
+            cfg_path=paths["cfg"],
+            names=names,
+            projection=TRITON_PROJECTION,
+            num_runoffs=num_runoffs,
+            runoff_rows=n_rows,
+            sim_duration_s=sim_duration_s,
+            mapping_interval_s=TRITON_MAPPING_INTERVAL_S,
+            obs_interval_s=TRITON_HYDROGRAPH_INTERVAL_S,
+            const_mann=TRITON_CONST_MANN,
+            decomp_factor=TRITON_DECOMP_FACTOR,
+            decomp_type=TRITON_DECOMP_TYPE,
+            courant=TRITON_COURANT,
+            init_names=init_names,
+        )
 
     # cross-file consistency checks: max rmap id (N) must stay < num_runoffs (N+1)
-    assert int(zone_ids.max()) == num_runoffs - 1, "max rmap zone id must be num_runoffs-1"
+    assert int(zone_ids.max()) == num_runoffs - 1, (
+        "max rmap zone id must be num_runoffs-1"
+    )
     log.info("Done. TRITON inputs written to %s", out)
-    log.info("  num_runoffs=%d runoff_row_size=%d obs=%d sim_duration=%ds",
-             num_runoffs, n_rows, n_obs, sim_duration_s)
+    log.info(
+        "  num_runoffs=%d runoff_row_size=%d obs=%d sim_duration=%ds",
+        num_runoffs,
+        n_rows,
+        n_obs,
+        sim_duration_s,
+    )
     return 0
 
 

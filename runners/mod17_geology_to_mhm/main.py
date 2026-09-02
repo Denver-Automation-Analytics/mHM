@@ -39,8 +39,9 @@ def _read_gpkg_layers(path: Path) -> dict[str, gpd.GeoDataFrame]:
     return {lyr: gpd.read_file(path, layer=lyr) for lyr in fiona.listlayers(str(path))}
 
 
-def _acquire_or_load(boundary: gpd.GeoDataFrame, cache_path: Path,
-                     log: logging.Logger) -> dict[str, gpd.GeoDataFrame]:
+def _acquire_or_load(
+    boundary: gpd.GeoDataFrame, cache_path: Path, log: logging.Logger
+) -> dict[str, gpd.GeoDataFrame]:
     if cache_path.exists():
         log.info("Using cached karst vectors: %s", cache_path)
         return _read_gpkg_layers(cache_path)
@@ -48,7 +49,9 @@ def _acquire_or_load(boundary: gpd.GeoDataFrame, cache_path: Path,
     return acquire_karst(boundary_gdf=boundary, output_path=str(cache_path), clip=True)
 
 
-def _group_by_class(frames: dict[str, gpd.GeoDataFrame]) -> dict[str, list[gpd.GeoDataFrame]]:
+def _group_by_class(
+    frames: dict[str, gpd.GeoDataFrame],
+) -> dict[str, list[gpd.GeoDataFrame]]:
     by_class: dict[str, list[gpd.GeoDataFrame]] = {}
     for key, gdf in frames.items():
         if gdf is None or gdf.empty:
@@ -67,8 +70,12 @@ def main() -> None:
 
     morph_dir = Path(WORKING_DIR) / "mhm_input" / "morph"
     grid_def = load_dem_grid(morph_dir / "dem.nc", nodata=NODATA)
-    log.info("L0 grid: %d x %d at %d m", grid_def["ncols"], grid_def["nrows"],
-             int(grid_def["cellsize"]))
+    log.info(
+        "L0 grid: %d x %d at %d m",
+        grid_def["ncols"],
+        grid_def["nrows"],
+        int(grid_def["cellsize"]),
+    )
 
     cache_path = morph_dir / "raw" / "karst.gpkg"
     WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson")

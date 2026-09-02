@@ -34,15 +34,17 @@ def _header_from_nc(path: Path) -> dict:
     with nc.Dataset(path) as ds:
         x = ds["x"][:]
         y = ds["y"][:]
-        fill = getattr(ds.variables.get(list(ds.variables)[-1], object()), "_FillValue", -9999.0)
-    cs = float(x[1] - x[0])          # positive west→east step
-    cs_y = float(y[0] - y[1])        # positive north→south step (y is north-down)
+        fill = getattr(
+            ds.variables.get(list(ds.variables)[-1], object()), "_FillValue", -9999.0
+        )
+    cs = float(x[1] - x[0])  # positive west→east step
+    cs_y = float(y[0] - y[1])  # positive north→south step (y is north-down)
     return {
-        "ncols":        int(x.shape[0]),
-        "nrows":        int(y.shape[0]),
-        "xllcorner":    float(x[0])   - cs   / 2,
-        "yllcorner":    float(y[-1])  - cs_y / 2,
-        "cellsize":     cs,
+        "ncols": int(x.shape[0]),
+        "nrows": int(y.shape[0]),
+        "xllcorner": float(x[0]) - cs / 2,
+        "yllcorner": float(y[-1]) - cs_y / 2,
+        "cellsize": cs,
         "NODATA_value": float(fill),
     }
 
@@ -69,11 +71,11 @@ def _load_header(header: HeaderLike) -> dict:
 
     # normalize types
     return {
-        "ncols":        int(parsed["ncols"]),
-        "nrows":        int(parsed["nrows"]),
-        "xllcorner":    float(parsed["xllcorner"]),
-        "yllcorner":    float(parsed["yllcorner"]),
-        "cellsize":     float(parsed["cellsize"]),
+        "ncols": int(parsed["ncols"]),
+        "nrows": int(parsed["nrows"]),
+        "xllcorner": float(parsed["xllcorner"]),
+        "yllcorner": float(parsed["yllcorner"]),
+        "cellsize": float(parsed["cellsize"]),
         "NODATA_value": float(parsed["NODATA_value"]),
     }
 
@@ -81,9 +83,9 @@ def _load_header(header: HeaderLike) -> dict:
 # --------------------------------------------------------------------------- #
 # Coordinate transformation
 # --------------------------------------------------------------------------- #
-def xx_to_latlon(xx: np.ndarray,
-                 yy: np.ndarray,
-                 coord_sys: str) -> Tuple[np.ndarray, np.ndarray]:
+def xx_to_latlon(
+    xx: np.ndarray, yy: np.ndarray, coord_sys: str
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Project (x, y) grids in `coord_sys` to (lon, lat) in WGS84.
     An empty `coord_sys` string means: no transformation (data already lon/lat).
@@ -98,18 +100,16 @@ def xx_to_latlon(xx: np.ndarray,
 # --------------------------------------------------------------------------- #
 # Header -> lat/lon grids
 # --------------------------------------------------------------------------- #
-def header_to_latlon(header: HeaderLike,
-                     coord_sys: str,
-                     do_corners: bool = False):
+def header_to_latlon(header: HeaderLike, coord_sys: str, do_corners: bool = False):
     """Build cell-center (and optionally corner) lat/lon arrays from a header."""
     h = _load_header(header)
     ncols, nrows = h["ncols"], h["nrows"]
     xll, yll, cs = h["xllcorner"], h["yllcorner"], h["cellsize"]
-    missing      = h["NODATA_value"]
+    missing = h["NODATA_value"]
 
     # cell-center grid (yy runs north-down so row 0 = northernmost)
-    xx = np.linspace(xll + cs / 2,                  xll + cs / 2 + (ncols - 1) * cs, ncols)
-    yy = np.linspace(yll + cs / 2 + (nrows - 1) * cs, yll + cs / 2,                   nrows)
+    xx = np.linspace(xll + cs / 2, xll + cs / 2 + (ncols - 1) * cs, ncols)
+    yy = np.linspace(yll + cs / 2 + (nrows - 1) * cs, yll + cs / 2, nrows)
     xx, yy = np.meshgrid(xx, yy)
 
     lons, lats = xx_to_latlon(xx, yy, coord_sys)
@@ -119,34 +119,48 @@ def header_to_latlon(header: HeaderLike,
 
     # cell-corner grids (preserved from the original for optional CF bounds use)
     def _corner(x_off: float, y_off: float):
-        cxx = np.linspace(xll + x_off,                 xll + x_off + (ncols - 1) * cs, ncols)
-        cyy = np.linspace(yll + y_off + (nrows - 1) * cs, yll + y_off,                  nrows)
+        cxx = np.linspace(xll + x_off, xll + x_off + (ncols - 1) * cs, ncols)
+        cyy = np.linspace(yll + y_off + (nrows - 1) * cs, yll + y_off, nrows)
         cxx, cyy = np.meshgrid(cxx, cyy)
         return xx_to_latlon(cxx, cyy, coord_sys)
 
-    ul_lons, ul_lats = _corner(0.0, cs)     # upper-left
-    ur_lons, ur_lats = _corner(cs,  cs)     # upper-right
-    lr_lons, lr_lats = _corner(cs,  0.0)    # lower-right
-    ll_lons, ll_lats = _corner(0.0, 0.0)    # lower-left
+    ul_lons, ul_lats = _corner(0.0, cs)  # upper-left
+    ur_lons, ur_lats = _corner(cs, cs)  # upper-right
+    lr_lons, lr_lats = _corner(cs, 0.0)  # lower-right
+    ll_lons, ll_lats = _corner(0.0, 0.0)  # lower-left
 
-    return (lons, lats, xx, yy, missing,
-            ll_lons, lr_lons, ur_lons, ul_lons,
-            ll_lats, lr_lats, ur_lats, ul_lats)
+    return (
+        lons,
+        lats,
+        xx,
+        yy,
+        missing,
+        ll_lons,
+        lr_lons,
+        ur_lons,
+        ul_lons,
+        ll_lats,
+        lr_lats,
+        ur_lats,
+        ul_lats,
+    )
 
 
 # --------------------------------------------------------------------------- #
 # NetCDF writing
 # --------------------------------------------------------------------------- #
-_CHUNK_ROWS = 32   # rows per batch; keeps peak memory ~400 MB at 3-km resolution
+_CHUNK_ROWS = 32  # rows per batch; keeps peak memory ~400 MB at 3-km resolution
 
 
-def _write_level(fh: nc.Dataset,
-                 lons: np.ndarray,
-                 lats: np.ndarray,
-                 xx: np.ndarray,
-                 yy: np.ndarray,
-                 missing: float,
-                 suffix: Tuple[str, str]) -> None:
+def _write_level(
+    fh: nc.Dataset,
+    lons: np.ndarray,
+    lats: np.ndarray,
+    xx: np.ndarray,
+    yy: np.ndarray,
+    missing: float,
+    suffix: Tuple[str, str],
+) -> None:
     """Write xc*, yc*, lon*, lat* variables for one mHM level."""
     sfx, long_sfx = suffix
 
@@ -166,17 +180,19 @@ def _write_level(fh: nc.Dataset,
     yc.axis = "Y"
     yc[:] = yy[:, 0]
 
-    lon_var = fh.createVariable(f"lon{sfx}", "f8", (y_dim, x_dim),
-                                zlib=True, complevel=4)
-    lon_var.units         = "degrees_east"
-    lon_var.long_name     = f"longitude{long_sfx}"
+    lon_var = fh.createVariable(
+        f"lon{sfx}", "f8", (y_dim, x_dim), zlib=True, complevel=4
+    )
+    lon_var.units = "degrees_east"
+    lon_var.long_name = f"longitude{long_sfx}"
     lon_var.missing_value = float(missing)
     lon_var[:] = lons
 
-    lat_var = fh.createVariable(f"lat{sfx}", "f8", (y_dim, x_dim),
-                                zlib=True, complevel=4)
-    lat_var.units         = "degrees_north"
-    lat_var.long_name     = f"latitude{long_sfx}"
+    lat_var = fh.createVariable(
+        f"lat{sfx}", "f8", (y_dim, x_dim), zlib=True, complevel=4
+    )
+    lat_var.units = "degrees_north"
+    lat_var.long_name = f"latitude{long_sfx}"
     lat_var.missing_value = float(missing)
     lat_var[:] = lats
 
@@ -195,7 +211,7 @@ def _write_level_chunked(
     missing = float(h["NODATA_value"])
 
     x_centers = np.linspace(xll + cs / 2, xll + cs / 2 + (ncols - 1) * cs, ncols)
-    y_centers = np.linspace(yll + cs / 2 + (nrows - 1) * cs, yll + cs / 2,  nrows)
+    y_centers = np.linspace(yll + cs / 2 + (nrows - 1) * cs, yll + cs / 2, nrows)
 
     x_dim, y_dim = f"xc{sfx}", f"yc{sfx}"
     if x_dim not in fh.dimensions:
@@ -212,24 +228,33 @@ def _write_level_chunked(
     yc[:] = y_centers
 
     lon_var = fh.createVariable(
-        f"lon{sfx}", "f8", (y_dim, x_dim),
-        zlib=True, complevel=4, chunksizes=(_CHUNK_ROWS, ncols),
+        f"lon{sfx}",
+        "f8",
+        (y_dim, x_dim),
+        zlib=True,
+        complevel=4,
+        chunksizes=(_CHUNK_ROWS, ncols),
     )
-    lon_var.units         = "degrees_east"
-    lon_var.long_name     = f"longitude{long_sfx}"
+    lon_var.units = "degrees_east"
+    lon_var.long_name = f"longitude{long_sfx}"
     lon_var.missing_value = missing
 
     lat_var = fh.createVariable(
-        f"lat{sfx}", "f8", (y_dim, x_dim),
-        zlib=True, complevel=4, chunksizes=(_CHUNK_ROWS, ncols),
+        f"lat{sfx}",
+        "f8",
+        (y_dim, x_dim),
+        zlib=True,
+        complevel=4,
+        chunksizes=(_CHUNK_ROWS, ncols),
     )
-    lat_var.units         = "degrees_north"
-    lat_var.long_name     = f"latitude{long_sfx}"
+    lat_var.units = "degrees_north"
+    lat_var.long_name = f"latitude{long_sfx}"
     lat_var.missing_value = missing
 
     transformer = (
         Transformer.from_crs(coord_sys, "EPSG:4326", always_xy=True)
-        if coord_sys else None
+        if coord_sys
+        else None
     )
 
     for row0 in range(0, nrows, _CHUNK_ROWS):
@@ -240,7 +265,7 @@ def _write_level_chunked(
         if transformer is not None:
             lons, lats = transformer.transform(xx_batch, yy_batch)
         else:
-            lons = np.array(xx_batch)   # materialise the broadcast view
+            lons = np.array(xx_batch)  # materialise the broadcast view
             lats = yy_batch
         lon_var[row0:row1, :] = lons
         lat_var[row0:row1, :] = lats
@@ -263,11 +288,11 @@ def derive_l_header(l0_header: HeaderLike, target_cellsize: float) -> dict:
     h = _load_header(l0_header)
     scale = target_cellsize / h["cellsize"]
     return {
-        "ncols":        math.ceil(h["ncols"] / scale),
-        "nrows":        math.ceil(h["nrows"] / scale),
-        "xllcorner":    h["xllcorner"],
-        "yllcorner":    h["yllcorner"],
-        "cellsize":     float(target_cellsize),
+        "ncols": math.ceil(h["ncols"] / scale),
+        "nrows": math.ceil(h["nrows"] / scale),
+        "xllcorner": h["xllcorner"],
+        "yllcorner": h["yllcorner"],
+        "cellsize": float(target_cellsize),
         "NODATA_value": h["NODATA_value"],
     }
 
@@ -295,8 +320,8 @@ def mhm_l2_from_l0(l0_header: HeaderLike, l2_cellsize: float) -> dict:
     # ncols = N-S (=ESRI nrows) and nrows = E-W (=ESRI ncols), and its
     # calculate_grid_properties derives xll from ncols_in (N-S) and yll from
     # nrows_in (E-W). Mirror that mapping exactly or the L2 origin won't match.
-    mhm_ncols_in = h["nrows"]   # N-S
-    mhm_nrows_in = h["ncols"]   # E-W
+    mhm_ncols_in = h["nrows"]  # N-S
+    mhm_nrows_in = h["ncols"]  # E-W
 
     mhm_ncols_out = _mhm_nint(mhm_ncols_in / cell_factor)
     if mhm_ncols_out * rounded < mhm_ncols_in:
@@ -306,19 +331,23 @@ def mhm_l2_from_l0(l0_header: HeaderLike, l2_cellsize: float) -> dict:
     if mhm_nrows_out * rounded < mhm_nrows_in:
         mhm_nrows_out += 1
 
-    xll = (h["xllcorner"]
-           + mhm_ncols_in * l2_cellsize / rounded
-           - mhm_ncols_out * l2_cellsize)
-    yll = (h["yllcorner"]
-           + mhm_nrows_in * l2_cellsize / rounded
-           - mhm_nrows_out * l2_cellsize)
+    xll = (
+        h["xllcorner"]
+        + mhm_ncols_in * l2_cellsize / rounded
+        - mhm_ncols_out * l2_cellsize
+    )
+    yll = (
+        h["yllcorner"]
+        + mhm_nrows_in * l2_cellsize / rounded
+        - mhm_nrows_out * l2_cellsize
+    )
 
     return {
-        "ncols":        mhm_nrows_out,   # x / E-W extent
-        "nrows":        mhm_ncols_out,   # y / N-S extent
-        "xllcorner":    xll,
-        "yllcorner":    yll,
-        "cellsize":     float(l2_cellsize),
+        "ncols": mhm_nrows_out,  # x / E-W extent
+        "nrows": mhm_ncols_out,  # y / N-S extent
+        "xllcorner": xll,
+        "yllcorner": yll,
+        "cellsize": float(l2_cellsize),
         "NODATA_value": h["NODATA_value"],
     }
 
@@ -330,7 +359,7 @@ def create_latlon(
     out_file: Union[str, Path],
     coord_sys: str,
     header_l1: HeaderLike,
-    header_l0: Optional[HeaderLike]  = None,
+    header_l0: Optional[HeaderLike] = None,
     header_l11: Optional[HeaderLike] = None,
 ) -> None:
     """
@@ -357,8 +386,8 @@ def create_latlon(
 
     with nc.Dataset(out_path, "w", format="NETCDF4") as fh:
         fh.description = "lat lon file"
-        fh.projection  = coord_sys if coord_sys else "geographic"
-        fh.history     = "Created " + time.ctime(time.time())
+        fh.projection = coord_sys if coord_sys else "geographic"
+        fh.history = "Created " + time.ctime(time.time())
 
         if header_l0 is not None:
             _write_level_chunked(fh, header_l0, coord_sys, ("_l0", " at level 0"))

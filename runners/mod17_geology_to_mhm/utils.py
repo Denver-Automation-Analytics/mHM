@@ -56,8 +56,9 @@ def load_dem_grid(dem_nc: str | Path, nodata: int = -9999) -> dict:
     }
 
 
-def write_ascii_grid(path: str | Path, grid: np.ndarray, grid_def: dict,
-                     nodata: int = -9999) -> None:
+def write_ascii_grid(
+    path: str | Path, grid: np.ndarray, grid_def: dict, nodata: int = -9999
+) -> None:
     """Write an integer grid as a 6-line-header ESRI ASCII file (north-up)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -28,6 +28,7 @@ Examples
     Run with multiple mhm exes:
         python run_mhm_checks.py -e ../mhm1 ../mhm2
 """
+
 import argparse
 import glob
 import os
@@ -84,7 +85,9 @@ MHM_EXE = ["../mhm"]
 # case 5 and 7 don't work with MPI. case 4 has a bug working with ifort+debug
 # case 11 has a problem with ifort when writing mRM output
 SKIP_CASES_MPI = ["case_04", "case_05", "case_07", "case_11"]
-SKIP = ["case_11"]  # skip case_11 for all runs since it has a problem with ifort when writing mRM output
+SKIP = [
+    "case_11"
+]  # skip case_11 for all runs since it has a problem with ifort when writing mRM output
 
 
 # ARGUMENT PARSER #############################################################

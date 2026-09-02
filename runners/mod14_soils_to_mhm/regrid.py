@@ -63,8 +63,12 @@ def reproject_to_header(
 
         h, w = arr.shape
         ok = (
-            (ci >= 0) & (ci < w) & (ri >= 0) & (ri < h)
-            & np.isfinite(sx) & np.isfinite(sy)
+            (ci >= 0)
+            & (ci < w)
+            & (ri >= 0)
+            & (ri < h)
+            & np.isfinite(sx)
+            & np.isfinite(sy)
         )
         vals = arr[ri[ok], ci[ok]]
         good = vals != src_nodata

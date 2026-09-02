@@ -19,7 +19,9 @@ def _sanitize_attr(value):
         return json.dumps(value, default=str, sort_keys=True)
     if isinstance(value, set):
         return sorted(value)
-    if isinstance(value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)):
+    if isinstance(
+        value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)
+    ):
         return value
     return str(value)
 
@@ -46,7 +48,7 @@ def write_pet(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     template_var = template_ds[tavg_var]
-    dims = list(template_var.dims)          # e.g. ["time", "y", "x"]
+    dims = list(template_var.dims)  # e.g. ["time", "y", "x"]
     ntime = pet_data.shape[0]
     coords = {
         d: (template_ds[d].values[:ntime] if d == "time" else template_ds[d])
@@ -64,7 +66,9 @@ def write_pet(
     if "grid_mapping" in template_var.attrs:
         pet_attrs["grid_mapping"] = template_var.attrs["grid_mapping"]
 
-    pet_da = xr.DataArray(pet_data, dims=dims, coords=coords, name="pet", attrs=pet_attrs)
+    pet_da = xr.DataArray(
+        pet_data, dims=dims, coords=coords, name="pet", attrs=pet_attrs
+    )
     pet_ds = pet_da.to_dataset()
 
     # carry scalar CRS variables (spatial_ref / grid_mapping) from data_vars and coords
@@ -80,14 +84,14 @@ def write_pet(
 
     encoding = {
         "pet": {
-            "dtype":      "f8",
+            "dtype": "f8",
             "_FillValue": nodata,
-            "zlib":       True,
-            "complevel":  4,
+            "zlib": True,
+            "complevel": 4,
         },
         "time": {
-            "dtype":    "i4",
-            "units":    f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}",
+            "dtype": "i4",
+            "units": f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}",
             "calendar": "standard",
         },
     }
@@ -109,7 +113,7 @@ def create_pet_nc(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     template_var = template_ds[tavg_var]
-    dims = list(template_var.dims)           # e.g. ["time", "y", "x"]
+    dims = list(template_var.dims)  # e.g. ["time", "y", "x"]
     spatial_dims = [d for d in dims if d != "time"]
 
     shape = template_var.shape
@@ -137,9 +141,9 @@ def create_pet_nc(
 
         # time variable
         tv = f.createVariable("time", "i4", ("time",))
-        tv.units    = f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}"
+        tv.units = f"{'days' if stat_freq == 'daily' else 'hours'} since {ref_time:%Y-%m-%d %H:%M:%S}"
         tv.calendar = "standard"
-        tv.axis     = "T"
+        tv.axis = "T"
 
         # spatial coordinate variables
         for dim in spatial_dims:
@@ -152,7 +156,10 @@ def create_pet_nc(
                 cv[:] = coord.values
 
         # scalar CRS variable
-        if gm_name and gm_name in {**dict(template_ds.data_vars), **dict(template_ds.coords)}:
+        if gm_name and gm_name in {
+            **dict(template_ds.data_vars),
+            **dict(template_ds.coords),
+        }:
             crs_src = template_ds[gm_name]
             crs_v = f.createVariable(gm_name, "i4")
             for k, v in crs_src.attrs.items():
@@ -164,13 +171,16 @@ def create_pet_nc(
         # pet variable
         chunk_t = min(nc_chunk_t, 1)  # at least 1; actual size set here
         pv = f.createVariable(
-            "pet", "f4", ("time", *spatial_dims),
+            "pet",
+            "f4",
+            ("time", *spatial_dims),
             fill_value=np.float32(nodata),
-            zlib=True, complevel=4,
+            zlib=True,
+            complevel=4,
             chunksizes=(nc_chunk_t, *spatial_shape),
         )
-        pv.units         = units
-        pv.long_name     = "potential evapotranspiration"
+        pv.units = units
+        pv.long_name = "potential evapotranspiration"
         pv.standard_name = "water_potential_evaporation_amount"
         pv.missing_value = np.float32(nodata)
         if gm_name:
@@ -188,8 +198,8 @@ def write_pet_chunk(
     """Append one chunk of PET data to a file previously created by create_pet_nc()."""
     t_end = time_start_idx + len(chunk_data)
     with nc4.Dataset(out_path, "a") as f:
-        f["pet"][time_start_idx:t_end, :, :]  = chunk_data
-        f["time"][time_start_idx:t_end]        = time_offsets
+        f["pet"][time_start_idx:t_end, :, :] = chunk_data
+        f["time"][time_start_idx:t_end] = time_offsets
 
 
 def write_header_txt(header: dict, out_path: Path) -> None:

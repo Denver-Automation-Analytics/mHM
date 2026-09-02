@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from __future__ import print_function
+
 """
 
 
@@ -15,9 +16,10 @@ Written  Matthias Cuntz & Juliane Mai Nov 2014 - write a netcdf file in L0
 import argparse
 
 addargs = []
-parser  = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
-                                  description=('''!!!.'''))
-args    = parser.parse_args()
+parser = argparse.ArgumentParser(
+    formatter_class=argparse.RawDescriptionHelpFormatter, description=("""!!!.""")
+)
+args = parser.parse_args()
 del parser, args
 
 # import packages needed after help so that help with command line -h is fast
@@ -38,38 +40,49 @@ nrow = 432
 
 ntime = 1826
 timeunit = "days since 1989-01-01 00:00:00"
-varname = 'lai'
-longname= 'LAI from Modis'
+varname = "lai"
+longname = "LAI from Modis"
 
-dat = np.arange(nrow*ncol*ntime).reshape((ntime, nrow, ncol))
-dat = np.sin(dat)*3 + 3.
+dat = np.arange(nrow * ncol * ntime).reshape((ntime, nrow, ncol))
+dat = np.sin(dat) * 3 + 3.0
 
 # -------------------------------------------------------------------------
 # Write netcdf file
 #
 
 # NETCDF - out
-filename = 'lai.nc'
-print('Create netcdf file ', filename)
-f = nc.Dataset(filename, 'w', format='NETCDF4')
+filename = "lai.nc"
+print("Create netcdf file ", filename)
+f = nc.Dataset(filename, "w", format="NETCDF4")
 
 # Structure
-x      = f.createDimension('x', ncol)
-y      = f.createDimension('y', nrow)
-time   = f.createDimension('time', None)
+x = f.createDimension("x", ncol)
+y = f.createDimension("y", nrow)
+time = f.createDimension("time", None)
 
-lai                = f.createVariable(varname, 'f8', ('time','y','x',), fill_value=-9999., zlib=True, least_significant_digit=3)
-lai.long_name      = longname
+lai = f.createVariable(
+    varname,
+    "f8",
+    (
+        "time",
+        "y",
+        "x",
+    ),
+    fill_value=-9999.0,
+    zlib=True,
+    least_significant_digit=3,
+)
+lai.long_name = longname
 
-time               = f.createVariable('time', 'i4', ('time',))
-time.units         = timeunit
-time.calendar      = "standard"
+time = f.createVariable("time", "i4", ("time",))
+time.units = timeunit
+time.calendar = "standard"
 
-f.Production = '2014/11/12'
+f.Production = "2014/11/12"
 
 # Data
-lai[:,:,:]      = dat
-time[:]         = np.arange(ntime)
+lai[:, :, :] = dat
+time[:] = np.arange(ntime)
 
 f.close()
 

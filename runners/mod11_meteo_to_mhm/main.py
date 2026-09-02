@@ -35,14 +35,22 @@ from affine import Affine
 from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import OUTPUT_CRS, L2_CELL_SIZE_M, START_DATE, END_DATE, TIMESTEP, WORKING_DIR, NODATA
+from config import (
+    OUTPUT_CRS,
+    L2_CELL_SIZE_M,
+    START_DATE,
+    END_DATE,
+    TIMESTEP,
+    WORKING_DIR,
+    NODATA,
+)
 from latlon_grid import mhm_l2_from_l0
 
-from hrrr_access   import open_hrrr, resolve_init_time, select_window
-from io_watershed  import load_and_prepare_watershed, snap_bbox_to_grid
-from mhm_format    import format_for_mhm, aggregate_to_daily
-from writers       import write_meteo, write_header_txt, finalize_variable
-from utils         import setup_logging, assert_grid_consistency
+from hrrr_access import open_hrrr, resolve_init_time, select_window
+from io_watershed import load_and_prepare_watershed, snap_bbox_to_grid
+from mhm_format import format_for_mhm, aggregate_to_daily
+from writers import write_meteo, write_header_txt, finalize_variable
+from utils import setup_logging, assert_grid_consistency
 
 load_dotenv()
 # Fail fast if the datalake key is not set; dataretrieval reads it implicitly.
@@ -53,12 +61,12 @@ if not os.environ.get("HRRR_FORECAST_REPO"):
 
 # mHM variable name → (output subdir, output filename)
 OUT_VARS = {
-    "pre":       ("pre",       "pre.nc"),
-    "tavg":      ("tavg",      "tavg.nc"),
+    "pre": ("pre", "pre.nc"),
+    "tavg": ("tavg", "tavg.nc"),
     "windspeed": ("windspeed", "windspeed.nc"),
-    "rhavg":     ("rhavg",     "rhavg.nc"),
-    "ssrd":      ("ssrd",      "ssrd.nc"),
-    "strd":      ("strd",      "strd.nc"),
+    "rhavg": ("rhavg", "rhavg.nc"),
+    "ssrd": ("ssrd", "ssrd.nc"),
+    "strd": ("strd", "strd.nc"),
 }
 
 # --------------------------------------------------------------------
@@ -99,7 +107,7 @@ def _iter_monthly_windows(ds, start_date: str, end_date: str):
     # Cover the whole final day: mHM expands the day-granular [start, end]
     # simulation period to hourly forcing and demands all 24 hours of end_date,
     # so a midnight cutoff would leave the last day 23 records short.
-    win_end   = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
+    win_end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
 
     month_starts = pd.date_range(win_start, win_end, freq="MS")
     if len(month_starts) == 0 or month_starts[0] > win_start:
@@ -116,9 +124,23 @@ def _iter_monthly_windows(ds, start_date: str, end_date: str):
         yield i, ds_slice
 
 
-def process_window(ds_window, batch_id, *, hrrr_crs, bbox_lcc, l2,
-                   target_transform, header, init_time, nodata,
-                   ref_time, temp_dirs, temp_files, log, vars_to_write=None):
+def process_window(
+    ds_window,
+    batch_id,
+    *,
+    hrrr_crs,
+    bbox_lcc,
+    l2,
+    target_transform,
+    header,
+    init_time,
+    nodata,
+    ref_time,
+    temp_dirs,
+    temp_files,
+    log,
+    vars_to_write=None,
+):
     """Clip → reproject → format one time window, writing per-variable temp files.
 
     ``vars_to_write`` limits output to the given variables (used when resuming);
@@ -157,8 +179,12 @@ def process_window(ds_window, batch_id, *, hrrr_crs, bbox_lcc, l2,
         write_meteo(ds_mhm[[var]], tmp, eff_ref, nodata, crs=OUTPUT_CRS)
         temp_files[var].append(tmp)
 
-    log.info("Batch %04d: %d %s timesteps → temp files",
-             batch_id, ds_mhm.sizes["time"], TIMESTEP)
+    log.info(
+        "Batch %04d: %d %s timesteps → temp files",
+        batch_id,
+        ds_mhm.sizes["time"],
+        TIMESTEP,
+    )
 
     # Release this batch's materialized arrays before the next iteration.
     # rioxarray/GDAL buffers are not reclaimed promptly by refcounting alone,
@@ -178,7 +204,9 @@ def main() -> None:
     log = logging.getLogger("hrrr_to_mhm")
 
     if TIMESTEP not in ("hourly", "daily"):
-        raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
+        raise ValueError(
+            f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'."
+        )
     log.info("Meteo output cadence: %s", TIMESTEP)
 
     meteo_out_root = Path(METEO_OUTPUT_DIR)
@@ -192,7 +220,9 @@ def main() -> None:
     log.info("HRRR CRS: %s", hrrr_crs)
 
     # 2. Watershed → LCC → snap to native HRRR grid
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(
+        WORKING_DIR, "mhm_input/domain/watershed.geojson"
+    )  # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
@@ -204,8 +234,9 @@ def main() -> None:
     # 3. Static target grid mHM derives from L0 — computed once, shared by all batches.
     l2 = mhm_l2_from_l0(L0_DEM, L2_CELL_SIZE_M)
     _cs = l2["cellsize"]
-    target_transform = Affine(_cs, 0.0, l2["xllcorner"],
-                              0.0, -_cs, l2["yllcorner"] + l2["nrows"] * _cs)
+    target_transform = Affine(
+        _cs, 0.0, l2["xllcorner"], 0.0, -_cs, l2["yllcorner"] + l2["nrows"] * _cs
+    )
     header = {**l2, "NODATA_value": int(NODATA)}
 
     # 4. Build the batch list (monthly for analysis; single window for forecast).
@@ -216,16 +247,18 @@ def main() -> None:
     else:
         # Include the whole END_DATE day (through 23:00) so hourly forcing has
         # the full final day mHM requires; see _iter_monthly_windows.
-        _src_end = (pd.Timestamp(END_DATE) + pd.Timedelta(days=1)
-                    - pd.Timedelta(hours=1))
+        _src_end = pd.Timestamp(END_DATE) + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
         ds_full = ds.sel(time=slice(pd.Timestamp(START_DATE), _src_end))
         if ds_full.sizes.get("time", 0) == 0:
             raise ValueError(
                 f"No timesteps found in [{START_DATE}, {END_DATE}]. "
                 "Check START_DATE / END_DATE against the available analysis period."
             )
-        log.info("Analysis window: %s .. %s",
-                 str(ds_full["time"].values[0]), str(ds_full["time"].values[-1]))
+        log.info(
+            "Analysis window: %s .. %s",
+            str(ds_full["time"].values[0]),
+            str(ds_full["time"].values[-1]),
+        )
         # Not used by format_for_mhm when a time axis already exists.
         init_time = resolve_init_time(ds, "latest")
         windows = list(_iter_monthly_windows(ds_full, START_DATE, END_DATE))
@@ -233,7 +266,7 @@ def main() -> None:
     # 5. Classify per-variable work from RESUME and on-disk temp state.
     expected_bids = [bid for bid, _ in windows]
     temp_dirs = {}
-    status = {}          # var -> "done" | "finalize" | "generate"
+    status = {}  # var -> "done" | "finalize" | "generate"
     missing_by_var = {}  # var -> set of batch ids still to (re)generate
     for var, (sub, fname) in OUT_VARS.items():
         tdir = meteo_out_root / sub / "_tmp"
@@ -259,9 +292,13 @@ def main() -> None:
         else:
             missing_by_var[var] = set(expected_bids) - _present_batch_ids(tdir, var)
             status[var] = "generate" if missing_by_var[var] else "finalize"
-        log.info("Variable %-9s → %-8s (%d/%d batches present)",
-                 var, status[var],
-                 len(expected_bids) - len(missing_by_var[var]), len(expected_bids))
+        log.info(
+            "Variable %-9s → %-8s (%d/%d batches present)",
+            var,
+            status[var],
+            len(expected_bids) - len(missing_by_var[var]),
+            len(expected_bids),
+        )
 
     if all(s == "done" for s in status.values()):
         log.info("All variables already finalized; nothing to do.")
@@ -285,11 +322,19 @@ def main() -> None:
     for batch_id in sorted(batch_vars):
         window = windows_by_id.pop(batch_id)
         ref_time = process_window(
-            window, batch_id,
-            hrrr_crs=hrrr_crs, bbox_lcc=bbox_lcc, l2=l2,
-            target_transform=target_transform, header=header,
-            init_time=init_time, nodata=NODATA, ref_time=ref_time,
-            temp_dirs=temp_dirs, temp_files=temp_files, log=log,
+            window,
+            batch_id,
+            hrrr_crs=hrrr_crs,
+            bbox_lcc=bbox_lcc,
+            l2=l2,
+            target_transform=target_transform,
+            header=header,
+            init_time=init_time,
+            nodata=NODATA,
+            ref_time=ref_time,
+            temp_dirs=temp_dirs,
+            temp_files=temp_files,
+            log=log,
             vars_to_write=batch_vars[batch_id],
         )
         del window
@@ -309,8 +354,11 @@ def main() -> None:
         tdir = temp_dirs[var]
         try:
             finalize_variable(
-                sorted(tdir.glob(f"{var}_*.nc")), meteo_out_root / sub / fname,
-                ref_time, NODATA, crs=OUTPUT_CRS,
+                sorted(tdir.glob(f"{var}_*.nc")),
+                meteo_out_root / sub / fname,
+                ref_time,
+                NODATA,
+                crs=OUTPUT_CRS,
             )
             write_header_txt(header, meteo_out_root / sub / "header.txt")
         finally:
@@ -327,19 +375,25 @@ def main() -> None:
 
 if __name__ == "__main__":
     # ---- USER INPUTS ---------------------------------------------------
-    L0_DEM           = os.path.join(WORKING_DIR, "mhm_input/morph/dem.nc")
-    INIT_TIME        = "latest"                      # "latest" or "YYYY-MM-DDTHH" (UTC)
-    METEO_OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input/meteo")  # output directory for mHM-ready files
-    LATLON_OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input/latlon") # output directory for latlon.nc
-    FORECAST         = False                            # use forecast (True) or analysis (False) HRRR subscription
-    RESUME           = False    # skip finished vars / resume missing temp batches instead of wiping _tmp
+    L0_DEM = os.path.join(WORKING_DIR, "mhm_input/morph/dem.nc")
+    INIT_TIME = "latest"  # "latest" or "YYYY-MM-DDTHH" (UTC)
+    METEO_OUTPUT_DIR = os.path.join(
+        WORKING_DIR, "mhm_input/meteo"
+    )  # output directory for mHM-ready files
+    LATLON_OUTPUT_DIR = os.path.join(
+        WORKING_DIR, "mhm_input/latlon"
+    )  # output directory for latlon.nc
+    FORECAST = False  # use forecast (True) or analysis (False) HRRR subscription
+    RESUME = (
+        False  # skip finished vars / resume missing temp batches instead of wiping _tmp
+    )
 
     # --- HRRR subscription -----------------------------------------------
     # Repo name is read from the HRRR_REPO env var.
     if FORECAST:
-        HRRR_REPO             = os.environ["HRRR_FORECAST_REPO"]
-        HRRR_BRANCH_OR_TAG    = os.environ.get("HRRR_FORECAST_BRANCH_OR_TAG", "main")
+        HRRR_REPO = os.environ["HRRR_FORECAST_REPO"]
+        HRRR_BRANCH_OR_TAG = os.environ.get("HRRR_FORECAST_BRANCH_OR_TAG", "main")
     else:
-        HRRR_REPO             = os.environ["HRRR_ANALYSIS_REPO"]
-        HRRR_BRANCH_OR_TAG    = os.environ.get("HRRR_ANALYSIS_BRANCH_OR_TAG", "main")
+        HRRR_REPO = os.environ["HRRR_ANALYSIS_REPO"]
+        HRRR_BRANCH_OR_TAG = os.environ.get("HRRR_ANALYSIS_BRANCH_OR_TAG", "main")
     main()

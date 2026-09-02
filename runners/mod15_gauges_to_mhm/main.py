@@ -27,7 +27,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import OUTPUT_CRS, START_DATE, END_DATE, EVAL_START_DATE, WANTED_GAUGE_IDS, TIMESTEP, WORKING_DIR, NODATA
+from config import (
+    OUTPUT_CRS,
+    START_DATE,
+    END_DATE,
+    EVAL_START_DATE,
+    WANTED_GAUGE_IDS,
+    TIMESTEP,
+    WORKING_DIR,
+    NODATA,
+)
 
 # mHM reads the evaluation gauge only over evalPer; a gauge file that starts before
 # EVAL_START_DATE makes the hourly read_timeseries offset overflow (mo_read_timeseries.f90).
@@ -35,11 +44,18 @@ GAUGE_START = EVAL_START_DATE
 
 import geopandas as gpd
 
-from hyriver      import get_usgs_stations, get_nwis, prep_hourly, prep_daily, interpolate_gaps
-from mhm_format   import to_m3s, filter_by_qualifiers, write_gauge_file
-from idgauges     import build_idgauges_grid, write_id_map
-from writers      import write_nc
-from utils        import load_header_from_nc, write_header_txt, read_projection_wkt
+from hyriver import (
+    get_usgs_stations,
+    get_nwis,
+    prep_hourly,
+    prep_daily,
+    interpolate_gaps,
+)
+from mhm_format import to_m3s, filter_by_qualifiers, write_gauge_file
+from idgauges import build_idgauges_grid, write_id_map
+from writers import write_nc
+from utils import load_header_from_nc, write_header_txt, read_projection_wkt
+
 
 # --------------------------------------------------------------------
 def main() -> None:
@@ -56,13 +72,19 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     # 1. L0 header + target CRS.
-    l0_header  = load_header_from_nc(L0_MORPH_NC_PATH)
+    l0_header = load_header_from_nc(L0_MORPH_NC_PATH)
     target_crs = TARGET_CRS_WKT
-    log.info("L0 grid: %d x %d cells @ %s m", l0_header["ncols"],
-             l0_header["nrows"], l0_header["cellsize"])
+    log.info(
+        "L0 grid: %d x %d cells @ %s m",
+        l0_header["ncols"],
+        l0_header["nrows"],
+        l0_header["cellsize"],
+    )
 
     # 2. Discover gauges strictly inside the watershed polygon.
-    WATERSHED_FILE = os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson") # derived from mod10_dem_to_mhm
+    WATERSHED_FILE = os.path.join(
+        WORKING_DIR, "mhm_input/domain/watershed.geojson"
+    )  # derived from mod10_dem_to_mhm
     if not os.path.exists(WATERSHED_FILE):
         raise FileNotFoundError(
             f"Watershed file {WATERSHED_FILE} not found. Run mod10_dem_to_mhm first."
@@ -76,8 +98,8 @@ def main() -> None:
 
     if gauges_in.empty:
         log.warning(
-            "No USGS streamflow gauges found strictly inside %s. "
-            "Nothing to write.", WATERSHED_FILE,
+            "No USGS streamflow gauges found strictly inside %s. Nothing to write.",
+            WATERSHED_FILE,
         )
         print(f"[hydro] No gauges found inside {WATERSHED_FILE}. Exiting.")
         sys.exit(0)
@@ -85,16 +107,18 @@ def main() -> None:
     log.info("%d gauge(s) strictly inside watershed.", len(gauges_in))
 
     # 4. Fetch iv, aggregate to hourly, QC-filter, convert units, interpolate gaps.
-    survivors = []          # list of (site_no, name, lat, lon, series_df)
+    survivors = []  # list of (site_no, name, lat, lon, series_df)
     if TIMESTEP == "hourly":
         frequency = "iv"
     elif TIMESTEP == "daily":
         frequency = "dv"
     else:
-        raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
+        raise ValueError(
+            f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'."
+        )
     for _, row in gauges_in.iterrows():
         site_no = row["site_no"]
-        name    = row.get("station_nm", row.get("name", str(site_no)))
+        name = row.get("station_nm", row.get("name", str(site_no)))
 
         if len(WANTED_GAUGE_IDS) > 0:
             log.info("Filtering to %d user-specified gauge(s).", len(WANTED_GAUGE_IDS))
@@ -102,13 +126,13 @@ def main() -> None:
             if site_no not in WANTED_GAUGE_IDS:
                 log.info("Skipping %s (%s): not in user-specified list.", site_no, name)
                 continue
-   
+
             raw = get_nwis(
-                site       = site_no,
-                parameter  = "Flow",
-                frequency  = frequency,
-                start_date = GAUGE_START,
-                end_date   = END_DATE,
+                site=site_no,
+                parameter="Flow",
+                frequency=frequency,
+                start_date=GAUGE_START,
+                end_date=END_DATE,
             )
             if raw is None:
                 log.warning("Skipping %s (%s): fetch returned None.", site_no, name)
@@ -117,30 +141,44 @@ def main() -> None:
             if TIMESTEP == "hourly":
                 prep_df = prep_hourly(raw)
                 if prep_df.empty:
-                    log.warning("Skipping %s (%s): no data after hourly aggregation.", site_no, name)
+                    log.warning(
+                        "Skipping %s (%s): no data after hourly aggregation.",
+                        site_no,
+                        name,
+                    )
                     continue
             elif TIMESTEP == "daily":
                 prep_df = prep_daily(raw)
                 if prep_df.empty:
-                    log.warning("Skipping %s (%s): no data after daily aggregation.", site_no, name)
+                    log.warning(
+                        "Skipping %s (%s): no data after daily aggregation.",
+                        site_no,
+                        name,
+                    )
                     continue
 
-            clean = filter_by_qualifiers(prep_df, policy=QUALIFIER_POLICY, nodata=NODATA)
+            clean = filter_by_qualifiers(
+                prep_df, policy=QUALIFIER_POLICY, nodata=NODATA
+            )
             clean = to_m3s(clean, nodata=NODATA)
             clean = interpolate_gaps(clean, nodata=NODATA, max_gap_hours=MAX_GAP_HOURS)
 
             valid = clean.loc[clean["value"] != NODATA]
             if valid.empty:
-                log.warning("Skipping %s (%s): no valid values after QC.", site_no, name)
+                log.warning(
+                    "Skipping %s (%s): no valid values after QC.", site_no, name
+                )
                 continue
 
-            survivors.append({
-                "site_no": site_no,
-                "name":    name,
-                "lat":     float(row["dec_lat_va"]),
-                "lon":     float(row["dec_long_va"]),
-                "series":  clean,
-            })
+            survivors.append(
+                {
+                    "site_no": site_no,
+                    "name": name,
+                    "lat": float(row["dec_lat_va"]),
+                    "lon": float(row["dec_long_va"]),
+                    "series": clean,
+                }
+            )
 
     if not survivors:
         log.warning("All discovered gauges failed retrieval or QC. Nothing to write.")
@@ -156,53 +194,57 @@ def main() -> None:
     for local_id, g in enumerate(survivors, start=1):
         g["local_id"] = local_id
         write_gauge_file(
-            path         = out_root / f"{local_id}.txt",
-            local_id     = local_id,
-            site_no      = g["site_no"],
-            name         = g["name"],
-            series       = g["series"],
-            cadence      = TIMESTEP,
-            nodata       = NODATA,
+            path=out_root / f"{local_id}.txt",
+            local_id=local_id,
+            site_no=g["site_no"],
+            name=g["name"],
+            series=g["series"],
+            cadence=TIMESTEP,
+            nodata=NODATA,
         )
-
-
 
     # 6. Build and write idgauges.asc + id_map.csv + header.txt.
     grid = build_idgauges_grid(
-        survivors      = survivors,
-        l0_header      = l0_header,
-        target_crs_wkt = target_crs,
-        nodata         = NODATA,
+        survivors=survivors,
+        l0_header=l0_header,
+        target_crs_wkt=target_crs,
+        nodata=NODATA,
     )
     write_nc(out_root / "idgauges.nc", l0_header, grid, nodata=NODATA)
     write_header_txt(l0_header, out_root / "header.txt")
-    write_id_map(out_root / "id_map.csv", survivors,
-                 start=GAUGE_START, end=END_DATE, cadence=TIMESTEP)
+    write_id_map(
+        out_root / "id_map.csv",
+        survivors,
+        start=GAUGE_START,
+        end=END_DATE,
+        cadence=TIMESTEP,
+    )
 
     log.info("Done. %d gauge(s) written to %s", len(survivors), out_root)
 
 
 if __name__ == "__main__":
-
     # Load env from repo root explicitly so runs from any CWD behave the same.
     REPO_ROOT = Path(__file__).resolve().parents[2]
     load_dotenv(dotenv_path=REPO_ROOT / ".env", override=True)
     # ---- OUTPUTS ---------------------------------------------------
-    OUTPUT_DIR            = os.path.join(WORKING_DIR, "mhm_input", "gauge")
+    OUTPUT_DIR = os.path.join(WORKING_DIR, "mhm_input", "gauge")
     # --- L0 grid (derived from morph/dem.nc produced by mod10) ---------
-    L0_MORPH_NC_PATH      = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
-    TARGET_CRS_WKT        = OUTPUT_CRS
-    LATLON_NC_PATH        = os.path.join(WORKING_DIR, "mhm_input", "latlon", "latlon.nc")
+    L0_MORPH_NC_PATH = os.path.join(WORKING_DIR, "mhm_input", "morph", "dem.nc")
+    TARGET_CRS_WKT = OUTPUT_CRS
+    LATLON_NC_PATH = os.path.join(WORKING_DIR, "mhm_input", "latlon", "latlon.nc")
     # --- Retrieval knobs -----------------------------------------------
-    SITE_TYPE_CODE        = "ST"       # Stream sites
-    PARAMETER_CODE        = "00060"    # Discharge, m^3/s
-    MIN_RECORD_YEARS      = 1          # skip gauges with valid record shorter than this
+    SITE_TYPE_CODE = "ST"  # Stream sites
+    PARAMETER_CODE = "00060"  # Discharge, m^3/s
+    MIN_RECORD_YEARS = 1  # skip gauges with valid record shorter than this
     # Recent event data is provisional until USGS Director review, so keep it.
-    QUALIFIER_POLICY      = "keep_all"   # or "keep_approved_only" or "keep_approved_provisional"
-    CHUNK_YEARS           = 1          # break continuous requests into 1-yr chunks
-    MAX_WORKERS           = 4          # parallel per-gauge network calls
+    QUALIFIER_POLICY = (
+        "keep_all"  # or "keep_approved_only" or "keep_approved_provisional"
+    )
+    CHUNK_YEARS = 1  # break continuous requests into 1-yr chunks
+    MAX_WORKERS = 4  # parallel per-gauge network calls
     # --- Constants -----------------------------------------------------
-    MAX_GAP_HOURS         = None       # None -> interpolate all gaps; int to cap gap size
-    LOG_LEVEL             = logging.INFO
+    MAX_GAP_HOURS = None  # None -> interpolate all gaps; int to cap gap size
+    LOG_LEVEL = logging.INFO
 
     main()

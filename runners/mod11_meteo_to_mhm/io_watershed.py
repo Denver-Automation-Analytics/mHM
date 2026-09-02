@@ -30,6 +30,6 @@ def snap_bbox_to_grid(bounds, cell_size_m: int):
     minx, miny, maxx, maxy = bounds
     xll = math.floor(minx / cell_size_m) * cell_size_m
     yll = math.floor(miny / cell_size_m) * cell_size_m
-    xur = math.ceil(maxx / cell_size_m)  * cell_size_m
-    yur = math.ceil(maxy / cell_size_m)  * cell_size_m
+    xur = math.ceil(maxx / cell_size_m) * cell_size_m
+    yur = math.ceil(maxy / cell_size_m) * cell_size_m
     return (xll, yll, xur, yur)

@@ -22,11 +22,11 @@ def load_header(path: str | Path) -> dict:
         parsed[key] = val
 
     return {
-        "ncols":        int(parsed["ncols"]),
-        "nrows":        int(parsed["nrows"]),
-        "xllcorner":    float(parsed["xllcorner"]),
-        "yllcorner":    float(parsed["yllcorner"]),
-        "cellsize":     float(parsed["cellsize"]),
+        "ncols": int(parsed["ncols"]),
+        "nrows": int(parsed["nrows"]),
+        "xllcorner": float(parsed["xllcorner"]),
+        "yllcorner": float(parsed["yllcorner"]),
+        "cellsize": float(parsed["cellsize"]),
         "NODATA_value": float(parsed["NODATA_value"]),
     }
 
@@ -50,6 +50,7 @@ def write_header_txt(header: dict, out_path: Path) -> None:
 def load_header_from_nc(path: str | Path) -> dict:
     """Derive an mHM-style header dict from a morph NetCDF file written by write_nc."""
     import netCDF4 as nc4
+
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Morph NetCDF not found: {path}")
@@ -67,11 +68,11 @@ def load_header_from_nc(path: str | Path) -> dict:
     xllcorner = float(x.min() - 0.5 * cellsize)
     yllcorner = float(y.min() - 0.5 * cellsize)
     return {
-        "ncols":        len(x),
-        "nrows":        len(y),
-        "xllcorner":    xllcorner,
-        "yllcorner":    yllcorner,
-        "cellsize":     cellsize,
+        "ncols": len(x),
+        "nrows": len(y),
+        "xllcorner": xllcorner,
+        "yllcorner": yllcorner,
+        "cellsize": cellsize,
         "NODATA_value": nodata,
     }
 
@@ -79,6 +80,7 @@ def load_header_from_nc(path: str | Path) -> dict:
 def read_projection_wkt(latlon_path: str | Path) -> str:
     """Extract the projection WKT from the meteo latlon.nc global attrs."""
     import netCDF4 as nc
+
     with nc.Dataset(latlon_path) as fh:
         proj = getattr(fh, "projection", None)
     if not proj or proj == "geographic":

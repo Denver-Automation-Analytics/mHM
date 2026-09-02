@@ -11,7 +11,7 @@ from utils import write_ascii_grid
 
 log = logging.getLogger("geology_to_mhm")
 
-MAX_GEO_UNITS = 25   # mHM parameter maxGeoUnit (mo_mpr_constants.f90)
+MAX_GEO_UNITS = 25  # mHM parameter maxGeoUnit (mo_mpr_constants.f90)
 NONKARST_ID = 1
 NONKARST_DESC = "Non_karst"
 # USGS classes that are losing/non-aquifer basins rather than gaining karst; kept
@@ -20,8 +20,12 @@ NONKARST_DESC = "Non_karst"
 NON_KARST_LABELS = {"Evaporite_Basins"}
 
 
-def build_geology(class_masks: list[tuple[str, np.ndarray]], grid_def: dict,
-                  out_dir: str | Path, nodata: int = -9999) -> dict:
+def build_geology(
+    class_masks: list[tuple[str, np.ndarray]],
+    grid_def: dict,
+    out_dir: str | Path,
+    nodata: int = -9999,
+) -> dict:
     """Assign geology ClassUnits and write geology_class.asc + classdefinition.
 
     class_masks are (label, bool L0 mask) in priority order (first-wins on
@@ -80,8 +84,6 @@ def _write_classdefinition(path: Path, present: list[tuple[str, int]]) -> None:
         f"{'GeoParam(i)':<12}{'ClassUnit':<12}{'Karstic':<10}Description",
     ]
     for geoparam, classunit, karstic, desc in rows:
-        lines.append(
-            f"{geoparam:<12}{classunit:<12}{karstic:<10}{desc}"
-        )
+        lines.append(f"{geoparam:<12}{classunit:<12}{karstic:<10}{desc}")
     lines.append("!<-END")
     path.write_text("\n".join(lines) + "\n")

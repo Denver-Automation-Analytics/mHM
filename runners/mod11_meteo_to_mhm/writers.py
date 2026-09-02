@@ -23,8 +23,9 @@ _ACCUM_VARS = ("pre", "ssrd", "strd")
 _ZEROFILL_VARS = ("pre",)
 
 
-def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
-                     crs: str | None) -> xr.DataArray:
+def _gap_fill_series(
+    da: xr.DataArray, var: str, nodata: float, crs: str | None
+) -> xr.DataArray:
     """Fill nodata gaps so no sentinel survives inside the domain mask.
 
     Spatially fills edge/partial gaps per timestep from nearest valid neighbours,
@@ -49,14 +50,22 @@ def _gap_fill_series(da: xr.DataArray, var: str, nodata: float,
         if var in _ZEROFILL_VARS:
             filled = filled.fillna(0.0)
         else:
-            filled = (filled.interpolate_na(dim="time", method="linear")
-                            .ffill("time").bfill("time"))
+            filled = (
+                filled.interpolate_na(dim="time", method="linear")
+                .ffill("time")
+                .bfill("time")
+            )
 
         residual = int(np.isnan(filled).sum())
-        log.info("gap-fill %s: filled %d cells (spatial) + %d cells across %d "
-                 "empty timesteps (temporal); residual nodata: %d",
-                 var, n_missing - n_after_spatial, n_after_spatial,
-                 empty_steps, residual)
+        log.info(
+            "gap-fill %s: filled %d cells (spatial) + %d cells across %d "
+            "empty timesteps (temporal); residual nodata: %d",
+            var,
+            n_missing - n_after_spatial,
+            n_after_spatial,
+            empty_steps,
+            residual,
+        )
         da = filled
 
     return da.drop_vars("spatial_ref", errors="ignore")
@@ -68,7 +77,9 @@ def _sanitize_attr_value(value):
         return json.dumps(value, default=str, sort_keys=True)
     if isinstance(value, set):
         return sorted(value)
-    if isinstance(value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)):
+    if isinstance(
+        value, (str, bytes, numbers.Number, np.number, np.ndarray, list, tuple)
+    ):
         return value
     return str(value)
 
@@ -79,16 +90,20 @@ def _sanitize_dataset_attrs(ds: xr.Dataset) -> xr.Dataset:
     out.attrs = {k: _sanitize_attr_value(v) for k, v in out.attrs.items()}
 
     for name in out.variables:
-        out[name].attrs = {k: _sanitize_attr_value(v) for k, v in out[name].attrs.items()}
+        out[name].attrs = {
+            k: _sanitize_attr_value(v) for k, v in out[name].attrs.items()
+        }
 
     return out
 
 
-def write_meteo(ds: xr.Dataset,
-                out_path: Path,
-                ref_time: pd.Timestamp,
-                nodata: float,
-                crs: str | None = None) -> None:
+def write_meteo(
+    ds: xr.Dataset,
+    out_path: Path,
+    ref_time: pd.Timestamp,
+    nodata: float,
+    crs: str | None = None,
+) -> None:
     """Write a single-variable meteo NetCDF (pre.nc or tavg.nc)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -102,14 +117,14 @@ def write_meteo(ds: xr.Dataset,
     _tu = "days" if (len(_t) < 2 or (_t[1] - _t[0]) >= pd.Timedelta("1D")) else "hours"
     encoding = {
         var: {
-            "dtype":     "f8",
+            "dtype": "f8",
             "_FillValue": nodata,
-            "zlib":       True,
-            "complevel":  4,
+            "zlib": True,
+            "complevel": 4,
         },
         "time": {
-            "dtype":    "i4",
-            "units":    f"{_tu} since {ref_time:%Y-%m-%d %H:%M:%S}",
+            "dtype": "i4",
+            "units": f"{_tu} since {ref_time:%Y-%m-%d %H:%M:%S}",
             "calendar": "standard",
         },
     }
@@ -122,11 +137,13 @@ def write_meteo(ds: xr.Dataset,
     log.info("Wrote %s", out_path)
 
 
-def finalize_variable(temp_files: list[Path],
-                      out_path: Path,
-                      ref_time: pd.Timestamp,
-                      nodata: float,
-                      crs: str | None = None) -> None:
+def finalize_variable(
+    temp_files: list[Path],
+    out_path: Path,
+    ref_time: pd.Timestamp,
+    nodata: float,
+    crs: str | None = None,
+) -> None:
     """Concatenate per-batch temp NetCDFs along time and write the final meteo file.
 
     ``mask_and_scale=False`` keeps the nodata sentinel as data so ``write_meteo``

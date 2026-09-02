@@ -20,34 +20,60 @@ import shutil
 import subprocess
 import sys
 from datetime import date, timedelta
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from config import L0_CELL_SIZE_M, L1_CELL_SIZE_M, L2_CELL_SIZE_M, OUTPUT_CRS, N_OMP_THREADS, START_DATE, END_DATE, EVAL_START_DATE, TIMESTEP, WARMUP_DAYS, WORKING_DIR, ROUTING_METHOD, OPTI_OBJECTIVE, N_ITERATIONS, SEED, RESUME
+from config import (
+    L0_CELL_SIZE_M,
+    L1_CELL_SIZE_M,
+    L2_CELL_SIZE_M,
+    OUTPUT_CRS,
+    N_OMP_THREADS,
+    START_DATE,
+    END_DATE,
+    EVAL_START_DATE,
+    TIMESTEP,
+    WARMUP_DAYS,
+    WORKING_DIR,
+    ROUTING_METHOD,
+    OPTI_OBJECTIVE,
+    N_ITERATIONS,
+    SEED,
+    RESUME,
+)
 from pathlib import Path
 
-from readers import derive_eval_period, read_gauge_info, read_gauge_obs_window, read_lcover_scenes, read_meteo_dates, read_soil_info
+from readers import (
+    derive_eval_period,
+    read_gauge_info,
+    read_gauge_obs_window,
+    read_lcover_scenes,
+    read_meteo_dates,
+    read_soil_info,
+)
 from nml_writer import write_mhm_nml
 
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
 # ---------------------------------------------------------------------------
-MHM_BINARY       = "/workspace/build/mhm"
+MHM_BINARY = "/workspace/build/mhm"
 
-OPTI_METHOD      = 1     # 1=DDS, 2=Simulated Annealing, 3=SCE
+OPTI_METHOD = 1  # 1=DDS, 2=Simulated Annealing, 3=SCE
 # Objective function -> mHM opti_function from config.OPTI_OBJECTIVE.
 OPTI_FUNCTION = {
-    "nse":       1,   # 1 - NSE(Q)
-    "lnnse":     2,   # 1 - lnNSE(Q); emphasises low flows
-    "nse_lnnse": 3,   # 1 - 0.5*(NSE + lnNSE)
-    "kge":       9,   # 1 - KGE(Q)
+    "nse": 1,  # 1 - NSE(Q)
+    "lnnse": 2,  # 1 - lnNSE(Q); emphasises low flows
+    "nse_lnnse": 3,  # 1 - 0.5*(NSE + lnNSE)
+    "kge": 9,  # 1 - KGE(Q)
     "multi_kge": 14,  # power-6 combination of per-gauge KGE
-    "wnse":      31,  # 1 - weighted NSE(Q); weights errors by observed flow (Hundecha & Bardossy 2004)
-    "kge_q_et":  29,  # combines KGE(Q) with catchment-average actual-ET (needs et.nc)
-    "multi_objective_lnnse_highflow_lnnse_lowflow": 18  # power-6 combination of per-gauge lnnse_highflow and lnnse_lowflow
+    "wnse": 31,  # 1 - weighted NSE(Q); weights errors by observed flow (Hundecha & Bardossy 2004)
+    "kge_q_et": 29,  # combines KGE(Q) with catchment-average actual-ET (needs et.nc)
+    "multi_objective_lnnse_highflow_lnnse_lowflow": 18,  # power-6 combination of per-gauge lnnse_highflow and lnnse_lowflow
 }.get(OPTI_OBJECTIVE)
 if OPTI_FUNCTION is None:
     raise ValueError(
         f"Unexpected OPTI_OBJECTIVE {OPTI_OBJECTIVE!r}. Must be "
-        "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', 'wnse', or 'kge_q_et'.")
+        "'nse', 'lnnse', 'nse_lnnse', 'kge', 'multi_kge', 'wnse', or 'kge_q_et'."
+    )
 # Model timestep [h] derived from config.TIMESTEP (single source of truth).
 # Always 1 h: mHM's daily model timestep (24) mis-indexes daily meteo (iMeteoTS bug in
 # mo_meteo_handler.f90 advances forcing only every 24 model-days), so run the model
@@ -62,17 +88,20 @@ OUTPUT_TIMESTEP = {"hourly": 1, "daily": -1}.get(TIMESTEP)
 if OUTPUT_TIMESTEP is None:
     raise ValueError(f"Unexpected TIMESTEP {TIMESTEP!r}. Must be 'hourly' or 'daily'.")
 # mRM routing scheme -> mHM processCase(8) from config.ROUTING_METHOD.
-ROUTING_CASE = {"muskingum": 1, "adaptive": 2, "adaptive_varying": 3}.get(ROUTING_METHOD)
+ROUTING_CASE = {"muskingum": 1, "adaptive": 2, "adaptive_varying": 3}.get(
+    ROUTING_METHOD
+)
 if ROUTING_CASE is None:
     raise ValueError(
         f"Unexpected ROUTING_METHOD {ROUTING_METHOD!r}. "
-        "Must be 'muskingum', 'adaptive', or 'adaptive_varying'.")
-SNAP_RADIUS_CELLS = 2    # gauge stream-snap search radius in L0 cells (±)
+        "Must be 'muskingum', 'adaptive', or 'adaptive_varying'."
+    )
+SNAP_RADIUS_CELLS = 2  # gauge stream-snap search radius in L0 cells (±)
 # Minimum flow accumulation (in L0 cells) for a snapped gauge to count as on-channel.
 MIN_CHANNEL_FACC_CELLS = 50
 
-REPO_PARAM_NML   = "/workspace/mhm_parameter.nml"
-REPO_OUTPUT_NML  = "/workspace/mhm_outputs.nml"
+REPO_PARAM_NML = "/workspace/mhm_parameter.nml"
+REPO_OUTPUT_NML = "/workspace/mhm_outputs.nml"
 REPO_MRM_OUT_NML = "/workspace/mrm_outputs.nml"
 # ---------------------------------------------------------------------------
 
@@ -96,7 +125,6 @@ logging.basicConfig(
 log = logging.getLogger("calibrate_to_mhm")
 
 
-
 def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
     """Trim the &geoparameter block to match nGeo_Formations (mHM requires equality)."""
     classdef = morph_dir / "geology_classdefinition.txt"
@@ -106,8 +134,9 @@ def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
 
     lines = param_nml.read_text().splitlines()
     try:
-        start = next(i for i, l in enumerate(lines)
-                     if l.strip().startswith("&geoparameter"))
+        start = next(
+            i for i, l in enumerate(lines) if l.strip().startswith("&geoparameter")
+        )
     except StopIteration:
         return
     end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "/")
@@ -119,7 +148,7 @@ def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
     for idx in range(1, n_geo + 1):
         src = templates[idx - 1] if idx <= len(templates) else templates[-1]
         rebuilt.append(re.sub(r"GeoParam\(\d+,:\)", f"GeoParam({idx},:)", src, count=1))
-    new_lines = lines[:start + 1] + rebuilt + lines[end:]
+    new_lines = lines[: start + 1] + rebuilt + lines[end:]
     param_nml.write_text("\n".join(new_lines) + "\n")
     log.info("Synced &geoparameter to %d geology unit(s): %s", n_geo, param_nml)
 
@@ -128,7 +157,8 @@ def _sync_geoparameter(param_nml: Path, morph_dir: Path) -> None:
 # Numbers may be Fortran scientific notation (e.g. 7.880E-01), so consume the exponent.
 _NUM = r"-?[0-9.]+(?:[eEdD][+-]?[0-9]+)?"
 _PARAM_VALUE_RE = re.compile(
-    rf"^(\s*([^=]+?)\s*=\s*({_NUM})\s*,\s*({_NUM})\s*,\s*)({_NUM})(.*)$")
+    rf"^(\s*([^=]+?)\s*=\s*({_NUM})\s*,\s*({_NUM})\s*,\s*)({_NUM})(.*)$"
+)
 
 
 def _pf(s: str) -> float:
@@ -144,7 +174,9 @@ def _apply_resume(param_nml: Path, final_nml: Path) -> None:
     the optimiser restarts from the last result while honouring current ranges.
     """
     if not final_nml.exists():
-        log.warning("RESUME=True but %s not found; using template start values.", final_nml)
+        log.warning(
+            "RESUME=True but %s not found; using template start values.", final_nml
+        )
         return
     finals: dict[str, float] = {}
     for line in final_nml.read_bytes().decode("latin-1").splitlines():
@@ -159,7 +191,9 @@ def _apply_resume(param_nml: Path, final_nml: Path) -> None:
         name = m.group(2).strip() if m else None
         if m and name in finals:
             lo, hi = _pf(m.group(3)), _pf(m.group(4))
-            val = min(max(finals[name], lo), hi)   # clamp resumed value to current bounds
+            val = min(
+                max(finals[name], lo), hi
+            )  # clamp resumed value to current bounds
             out.append(f"{m.group(1)}{val:.10g}{m.group(6)}")
             n += 1
         else:
@@ -178,8 +212,10 @@ def _strip_finalparam_garbage(final_nml: Path) -> None:
     if not final_nml.exists():
         return
     lines = final_nml.read_bytes().decode("latin-1").splitlines()
+
     def _garbage(s: str) -> bool:
         return any(ord(c) < 9 or (13 < ord(c) < 32) or ord(c) > 126 for c in s)
+
     cut = next((i for i, l in enumerate(lines) if _garbage(l)), len(lines))
     if cut == len(lines):
         return
@@ -187,7 +223,11 @@ def _strip_finalparam_garbage(final_nml: Path) -> None:
     while clean and clean[-1].strip() == "":
         clean.pop()
     final_nml.write_text("\n".join(clean) + "\n")
-    log.info("Stripped %d corrupted trailing line(s) from %s.", len(lines) - cut, final_nml.name)
+    log.info(
+        "Stripped %d corrupted trailing line(s) from %s.",
+        len(lines) - cut,
+        final_nml.name,
+    )
 
 
 def _write_mhm_outputs_nml(src: str, dst: Path, output_timestep: int) -> None:
@@ -233,30 +273,33 @@ def _resample_ascii_to_l0(src_asc: Path, dem_nc: Path) -> None:
     import numpy as np
 
     with nc4.Dataset(dem_nc) as ds:
-        x    = ds.variables["x"][:]
-        y    = ds.variables["y"][:]
-    xres  = float(x[1] - x[0])
-    xmin  = float(x[0])  - xres / 2
-    xmax  = float(x[-1]) + xres / 2
-    ymin  = float(y[-1]) - xres / 2
-    ymax  = float(y[0])  + xres / 2
+        x = ds.variables["x"][:]
+        y = ds.variables["y"][:]
+    xres = float(x[1] - x[0])
+    xmin = float(x[0]) - xres / 2
+    xmax = float(x[-1]) + xres / 2
+    ymin = float(y[-1]) - xres / 2
+    ymax = float(y[0]) + xres / 2
     ncols = len(x)
     nrows = len(y)
 
     # --- check if resampling is needed --------------------------------------
     hdr = _ascii_header(src_asc)
-    if (int(hdr["ncols"]) == ncols and int(hdr["nrows"]) == nrows
-            and abs(float(hdr["cellsize"]) - xres) < 1e-6):
-        return   # already on L0 grid
+    if (
+        int(hdr["ncols"]) == ncols
+        and int(hdr["nrows"]) == nrows
+        and abs(float(hdr["cellsize"]) - xres) < 1e-6
+    ):
+        return  # already on L0 grid
 
     log.info("Resampling %s to L0 grid (mode, %d m) …", src_asc.name, int(xres))
 
     src_cellsize = float(hdr["cellsize"])
-    src_xll      = float(hdr["xllcorner"])
-    src_yll      = float(hdr["yllcorner"])
-    src_ncols    = int(hdr["ncols"])
-    src_nrows    = int(hdr["nrows"])
-    nodata_val   = int(float(hdr.get("nodata_value", "-9999")))
+    src_xll = float(hdr["xllcorner"])
+    src_yll = float(hdr["yllcorner"])
+    src_ncols = int(hdr["ncols"])
+    src_nrows = int(hdr["nrows"])
+    nodata_val = int(float(hdr.get("nodata_value", "-9999")))
 
     # read data rows (skip 6-line header)
     with open(src_asc) as fh:
@@ -267,7 +310,7 @@ def _resample_ascii_to_l0(src_asc: Path, dem_nc: Path) -> None:
     # --- write source into an in-memory GeoTIFF with the known CRS ----------
     mem = gdal.GetDriverByName("MEM")
     src_ds = mem.Create("", src_ncols, src_nrows, 1, gdal.GDT_Int32)
-    ull_y  = src_yll + src_nrows * src_cellsize      # upper-left y
+    ull_y = src_yll + src_nrows * src_cellsize  # upper-left y
     src_ds.SetGeoTransform((src_xll, src_cellsize, 0.0, ull_y, 0.0, -src_cellsize))
     src_ds.SetProjection(OUTPUT_CRS)
     band = src_ds.GetRasterBand(1)
@@ -288,7 +331,7 @@ def _resample_ascii_to_l0(src_asc: Path, dem_nc: Path) -> None:
     )
 
     out = dst_ds.GetRasterBand(1).ReadAsArray().astype(np.int32)
-    src_ds = dst_ds = None   # close GDAL datasets
+    src_ds = dst_ds = None  # close GDAL datasets
 
     # --- write result back as ESRI ASCII grid in-place ----------------------
     with open(src_asc, "w") as fh:
@@ -323,7 +366,7 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     with nc4_mod.Dataset(dem_nc) as ds:
         x_l0 = np.array(ds.variables["x"][:])
         y_l0 = np.array(ds.variables["y"][:])
-        dem_vals = np.array(ds.variables["dem"][:])           # (nrows, ncols)
+        dem_vals = np.array(ds.variables["dem"][:])  # (nrows, ncols)
         dem_fill = float(ds.variables["dem"]._FillValue)
     ncols, nrows = len(x_l0), len(y_l0)
 
@@ -339,7 +382,7 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     tf = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
 
     # Valid-domain mask (True where DEM has data)
-    valid = (dem_vals != dem_fill)
+    valid = dem_vals != dem_fill
     # facc restricted to valid cells; -1 marks nodata so argmax ignores it
     facc_stream = np.where(valid & (facc_vals != facc_fill), facc_vals, -1)
 
@@ -359,37 +402,58 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
             gx, gy = tf.transform(lon, lat)
 
             # Snap to nearest L0 cell
-            ci = int(np.argmin(np.abs(x_l0 - gx)))   # column index
-            ri = int(np.argmin(np.abs(y_l0 - gy)))   # row index (y descends)
+            ci = int(np.argmin(np.abs(x_l0 - gx)))  # column index
+            ri = int(np.argmin(np.abs(y_l0 - gy)))  # row index (y descends)
 
             # Stay in bounds
             ci = max(0, min(ci, ncols - 1))
             ri = max(0, min(ri, nrows - 1))
 
             # Stream-snap onto the highest-facc valid cell in a small window
-            r0, r1 = max(0, ri - SNAP_RADIUS_CELLS), min(nrows, ri + SNAP_RADIUS_CELLS + 1)
-            c0, c1 = max(0, ci - SNAP_RADIUS_CELLS), min(ncols, ci + SNAP_RADIUS_CELLS + 1)
+            r0, r1 = (
+                max(0, ri - SNAP_RADIUS_CELLS),
+                min(nrows, ri + SNAP_RADIUS_CELLS + 1),
+            )
+            c0, c1 = (
+                max(0, ci - SNAP_RADIUS_CELLS),
+                min(ncols, ci + SNAP_RADIUS_CELLS + 1),
+            )
             win = facc_stream[r0:r1, c0:c1]
             if win.max() >= 0:
                 lr, lc = np.unravel_index(int(np.argmax(win)), win.shape)
                 sri, sci = r0 + lr, c0 + lc
                 if (sri, sci) != (ri, ci):
-                    log.info("Gauge %d snapped (%d,%d)→(%d,%d)  facc %d→%d",
-                             gid, ri, ci, sri, sci,
-                             int(facc_stream[ri, ci]), int(facc_stream[sri, sci]))
+                    log.info(
+                        "Gauge %d snapped (%d,%d)→(%d,%d)  facc %d→%d",
+                        gid,
+                        ri,
+                        ci,
+                        sri,
+                        sci,
+                        int(facc_stream[ri, ci]),
+                        int(facc_stream[sri, sci]),
+                    )
                 grid[sri, sci] = gid
-                placements[gid] = (sri, sci, int(facc_stream[ri, ci]),
-                                   int(facc_stream[sri, sci]))
+                placements[gid] = (
+                    sri,
+                    sci,
+                    int(facc_stream[ri, ci]),
+                    int(facc_stream[sri, sci]),
+                )
             elif valid[ri, ci]:
                 grid[ri, ci] = gid
-                placements[gid] = (ri, ci, int(facc_stream[ri, ci]),
-                                   int(facc_stream[ri, ci]))
+                placements[gid] = (
+                    ri,
+                    ci,
+                    int(facc_stream[ri, ci]),
+                    int(facc_stream[ri, ci]),
+                )
             else:
                 placements[gid] = None
 
     xres = float(x_l0[1] - x_l0[0])
-    xll  = float(x_l0[0])  - xres / 2
-    yll  = float(y_l0[-1]) - xres / 2
+    xll = float(x_l0[0]) - xres / 2
+    yll = float(y_l0[-1]) - xres / 2
 
     # Validate gauge snapping before writing so a bad file never lands on disk.
     cell_km2 = (xres * xres) / 1e6
@@ -404,22 +468,34 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
         sri, sci, f0, f1 = info
         area = f1 * cell_km2
         flag = "OK" if f1 >= MIN_CHANNEL_FACC_CELLS else "OFF-CHANNEL"
-        log.info("  gauge %d: (%d,%d) facc %d→%d  area %.1f km²  [%s]",
-                 gid, sri, sci, f0, f1, area, flag)
+        log.info(
+            "  gauge %d: (%d,%d) facc %d→%d  area %.1f km²  [%s]",
+            gid,
+            sri,
+            sci,
+            f0,
+            f1,
+            area,
+            flag,
+        )
         if f1 < MIN_CHANNEL_FACC_CELLS:
             problems.append(
                 f"gauge {gid}: snapped facc {f1} cells (< {MIN_CHANNEL_FACC_CELLS}); "
-                f"area {area:.1f} km² looks off-channel")
+                f"area {area:.1f} km² looks off-channel"
+            )
 
     placed_cells = [(v[0], v[1]) for v in placements.values() if v is not None]
     if len(set(placed_cells)) != len(placed_cells):
         problems.append("two gauges share the same cell (collision)")
     if problems:
         raise ValueError(
-            "idgauges.asc gauge-snapping validation failed:\n  "
-            + "\n  ".join(problems))
-    log.info("All %d gauges snapped onto channels (facc ≥ %d cells).",
-             len(placements), MIN_CHANNEL_FACC_CELLS)
+            "idgauges.asc gauge-snapping validation failed:\n  " + "\n  ".join(problems)
+        )
+    log.info(
+        "All %d gauges snapped onto channels (facc ≥ %d cells).",
+        len(placements),
+        MIN_CHANNEL_FACC_CELLS,
+    )
 
     with open(dst, "w") as fh:
         fh.write(f"ncols         {ncols}\n")
@@ -435,7 +511,9 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
     log.info("Written: %s  (%d gauges placed)", dst, n_placed)
 
 
-def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int) -> None:
+def _ensure_latlon_nc(
+    latlon_dir: Path, dem_nc: Path, resolution_hydrology: int
+) -> None:
     """Regenerate latlon.nc when the L0 shape no longer matches dem.nc."""
     import netCDF4 as nc4_mod
 
@@ -457,10 +535,13 @@ def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int)
     xres_l0 = float(x_l0[1] - x_l0[0])
     log.info(
         "Regenerating latlon.nc: L0=%dm (%d×%d), L1=%dm …",
-        int(xres_l0), ncols_l0, nrows_l0, resolution_hydrology,
+        int(xres_l0),
+        ncols_l0,
+        nrows_l0,
+        resolution_hydrology,
     )
 
-    xll = float(x_l0[0])  - xres_l0 / 2
+    xll = float(x_l0[0]) - xres_l0 / 2
     yll = float(y_l0[-1]) - xres_l0 / 2
 
     l0_header = {
@@ -487,11 +568,11 @@ def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int)
 
     latlon_dir.mkdir(parents=True, exist_ok=True)
     create_latlon(
-        out_file   = out_file,
-        coord_sys  = OUTPUT_CRS,
-        header_l0  = l0_header,
-        header_l1  = l1_header,
-        header_l11 = l1_header,
+        out_file=out_file,
+        coord_sys=OUTPUT_CRS,
+        header_l0=l0_header,
+        header_l1=l1_header,
+        header_l11=l1_header,
     )
     log.info("Written: %s", out_file)
 
@@ -499,6 +580,7 @@ def _ensure_latlon_nc(latlon_dir: Path, dem_nc: Path, resolution_hydrology: int)
 # ---------------------------------------------------------------------------
 # Phase 1: input validation
 # ---------------------------------------------------------------------------
+
 
 def _require(path: Path, produced_by: str) -> Path:
     if not path.exists():
@@ -516,7 +598,10 @@ def validate_inputs(domain: Path) -> None:
 
     # mod13 — land cover
     if not list((inp / "luse").glob("lc_*.asc")):
-        log.error("Missing: lc_*.asc in %s/mhm_input/luse/  (run mod13_landcover_to_mhm first)", domain)
+        log.error(
+            "Missing: lc_*.asc in %s/mhm_input/luse/  (run mod13_landcover_to_mhm first)",
+            domain,
+        )
         sys.exit(1)
 
     # mod14 — soils
@@ -524,21 +609,21 @@ def validate_inputs(domain: Path) -> None:
         _require(inp / "morph" / name, "mod14_soils_to_mhm")
 
     # mod11 — meteorology (NC format)
-    _require(inp / "meteo" / "pre"  / "pre.nc",   "mod11_meteo_to_mhm")
-    _require(inp / "meteo" / "tavg" / "tavg.nc",  "mod11_meteo_to_mhm")
+    _require(inp / "meteo" / "pre" / "pre.nc", "mod11_meteo_to_mhm")
+    _require(inp / "meteo" / "tavg" / "tavg.nc", "mod11_meteo_to_mhm")
 
     # mod12 — PET (NC format)
-    _require(inp / "meteo" / "pet" / "pet.nc",    "mod12_pet_to_mhm")
+    _require(inp / "meteo" / "pet" / "pet.nc", "mod12_pet_to_mhm")
 
     # mod15 — gauges (NC format for raster, CSV for metadata)
-    _require(inp / "gauge" / "id_map.csv",         "mod15_gauges_to_mhm")
-    _require(inp / "gauge" / "idgauges.nc",         "mod15_gauges_to_mhm")
+    _require(inp / "gauge" / "id_map.csv", "mod15_gauges_to_mhm")
+    _require(inp / "gauge" / "idgauges.nc", "mod15_gauges_to_mhm")
 
     # mod16 — LAI gridded NetCDF
-    _require(inp / "lai" / "lai.nc",               "mod16_lai_to_mhm")
+    _require(inp / "lai" / "lai.nc", "mod16_lai_to_mhm")
 
     # mod17 — latlon grid
-    _require(inp / "latlon" / "latlon.nc",          "mod17_latlon_to_mhm")
+    _require(inp / "latlon" / "latlon.nc", "mod17_latlon_to_mhm")
 
     # mhm binary
     _require(Path(MHM_BINARY), "cmake build")
@@ -550,9 +635,10 @@ def validate_inputs(domain: Path) -> None:
 # main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     domain = Path(WORKING_DIR)
-    inp    = domain / "mhm_input"
+    inp = domain / "mhm_input"
 
     # Phase 1 — validate
     validate_inputs(domain)
@@ -574,7 +660,8 @@ def main() -> None:
 
     try:
         eval_start, eval_end, warming_days = derive_eval_period(
-            first_meteo, last_meteo,
+            first_meteo,
+            last_meteo,
             eval_start_date=date.fromisoformat(EVAL_START_DATE),
             warmup_days=WARMUP_DAYS,
             obs_start=max(date.fromisoformat(START_DATE), gauge_start),
@@ -583,18 +670,28 @@ def main() -> None:
     except ValueError as exc:
         log.error("%s", exc)
         sys.exit(1)
-    log.info("Eval period:  %s – %s  (warming_days=%d, spin-up %s – %s)",
-             eval_start, eval_end, warming_days,
-             eval_start - timedelta(days=warming_days), eval_start - timedelta(days=1))
+    log.info(
+        "Eval period:  %s – %s  (warming_days=%d, spin-up %s – %s)",
+        eval_start,
+        eval_end,
+        warming_days,
+        eval_start - timedelta(days=warming_days),
+        eval_start - timedelta(days=1),
+    )
 
     lcover_scenes = read_lcover_scenes(inp / "luse")
     log.info("Land cover scenes: %s", [f for _, f in lcover_scenes])
 
-
     resolution = L1_CELL_SIZE_M
-    log.info("L1 resolution: %d m (from config.py; L0 terrain is %d m)", resolution, L0_CELL_SIZE_M)
+    log.info(
+        "L1 resolution: %d m (from config.py; L0 terrain is %d m)",
+        resolution,
+        L0_CELL_SIZE_M,
+    )
 
-    n_soil_horizons, soil_depths = read_soil_info(inp / "morph" / "soil_classdefinition.txt")
+    n_soil_horizons, soil_depths = read_soil_info(
+        inp / "morph" / "soil_classdefinition.txt"
+    )
     log.info("Soil horizons: %d  depths: %s mm", n_soil_horizons, soil_depths)
 
     # Phase 2b — resample ASCII inputs to L0
@@ -608,20 +705,20 @@ def main() -> None:
     write_mhm_nml(
         nml_path,
         domain,
-        resolution_hydrology = resolution,
-        timestep             = MODEL_TIMESTEP_H,
-        opti_method          = OPTI_METHOD,
-        opti_function        = OPTI_FUNCTION,
-        routing_case         = ROUTING_CASE,
-        n_iterations         = N_ITERATIONS,
-        seed                 = SEED,
-        warming_days         = warming_days,
-        eval_start           = eval_start,
-        eval_end             = eval_end,
-        lcover_scenes        = lcover_scenes,
-        gauges               = gauges,
-        n_soil_horizons      = n_soil_horizons,
-        soil_depths          = soil_depths,
+        resolution_hydrology=resolution,
+        timestep=MODEL_TIMESTEP_H,
+        opti_method=OPTI_METHOD,
+        opti_function=OPTI_FUNCTION,
+        routing_case=ROUTING_CASE,
+        n_iterations=N_ITERATIONS,
+        seed=SEED,
+        warming_days=warming_days,
+        eval_start=eval_start,
+        eval_end=eval_end,
+        lcover_scenes=lcover_scenes,
+        gauges=gauges,
+        n_soil_horizons=n_soil_horizons,
+        soil_depths=soil_depths,
     )
     log.info("Written: %s", nml_path)
 
@@ -631,7 +728,7 @@ def main() -> None:
     (inp / "optional_data").mkdir(parents=True, exist_ok=True)
 
     for src, name in (
-        (REPO_PARAM_NML,   "mhm_parameter.nml"),
+        (REPO_PARAM_NML, "mhm_parameter.nml"),
         (REPO_MRM_OUT_NML, "mrm_outputs.nml"),
     ):
         dst = domain / name
@@ -641,7 +738,12 @@ def main() -> None:
     # mhm_outputs.nml: gridded-output write frequency wired to config.TIMESTEP.
     out_nml = domain / "mhm_outputs.nml"
     _write_mhm_outputs_nml(REPO_OUTPUT_NML, out_nml, OUTPUT_TIMESTEP)
-    log.info("Written → %s (timeStep_model_outputs=%d, %s)", out_nml, OUTPUT_TIMESTEP, TIMESTEP)
+    log.info(
+        "Written → %s (timeStep_model_outputs=%d, %s)",
+        out_nml,
+        OUTPUT_TIMESTEP,
+        TIMESTEP,
+    )
 
     _sync_geoparameter(domain / "mhm_parameter.nml", inp / "morph")
 
@@ -651,7 +753,12 @@ def main() -> None:
 
     # Phase 5 — run mHM calibration
     log.info("Launching mHM calibration: %s  (cwd=%s)", MHM_BINARY, domain)
-    log.info("opti_method=%d  opti_function=%d  n_iterations=%d", OPTI_METHOD, OPTI_FUNCTION, N_ITERATIONS)
+    log.info(
+        "opti_method=%d  opti_function=%d  n_iterations=%d",
+        OPTI_METHOD,
+        OPTI_FUNCTION,
+        N_ITERATIONS,
+    )
     log.info("OMP_NUM_THREADS=%d", N_OMP_THREADS)
 
     proc = subprocess.Popen(
@@ -672,8 +779,11 @@ def main() -> None:
     # FinalParam.nml; treat that as success if the calibrated file exists. A positive exit
     # code is a real mHM error.
     if proc.returncode < 0 and final_nml.exists():
-        log.warning("mHM terminated by signal %d after writing FinalParam.nml; "
-                    "treating as benign at-exit crash.", -proc.returncode)
+        log.warning(
+            "mHM terminated by signal %d after writing FinalParam.nml; "
+            "treating as benign at-exit crash.",
+            -proc.returncode,
+        )
     elif proc.returncode != 0:
         log.error("mHM exited with code %d", proc.returncode)
         sys.exit(proc.returncode)

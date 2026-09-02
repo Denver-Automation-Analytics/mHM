@@ -24,13 +24,14 @@ import argparse
 
 # GLOBAL VARIABLES
 # default input directory
-IN_DIR = '../test_basin/input'
+IN_DIR = "../test_basin/input"
 # default output directory
-OUT_DIR = '../../MPR/reference/test_basin/input/temp'
+OUT_DIR = "../../MPR/reference/test_basin/input/temp"
 # all file types scanned in input directory
-POSSIBLE_SUFFIXES = ['.nc', '.asc']
+POSSIBLE_SUFFIXES = [".nc", ".asc"]
 # all folders scanned in input directory
-FOLDER_LIST = ['lai', 'luse', 'morph']
+FOLDER_LIST = ["lai", "luse", "morph"]
+
 
 # FUNCTIONS
 def parse_args():
@@ -42,19 +43,33 @@ def parse_args():
     Namespace object with args
     """
 
-    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     description='''This is a Python script to convert the input of mHM < v6.0 into 
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""This is a Python script to convert the input of mHM < v6.0 into 
                                      input for mHM >= v6.0.
 
     author: Robert Schweppe
-    created: Oct 2018''')
-    parser.add_argument('-i', '--in_dir', action='store',
-                        default=IN_DIR, dest='input_dir', metavar='input_dir',
-                        help='input directories, default: {}'.format(IN_DIR))
-    parser.add_argument('-o', '--out_dir', action='store',
-                        default=OUT_DIR, dest='output_dir', metavar='output_dir',
-                        help='Output directory, where netcdf files for mHM >6.0 are stored'
-                             ', default: {}'.format(OUT_DIR))
+    created: Oct 2018""",
+    )
+    parser.add_argument(
+        "-i",
+        "--in_dir",
+        action="store",
+        default=IN_DIR,
+        dest="input_dir",
+        metavar="input_dir",
+        help="input directories, default: {}".format(IN_DIR),
+    )
+    parser.add_argument(
+        "-o",
+        "--out_dir",
+        action="store",
+        default=OUT_DIR,
+        dest="output_dir",
+        metavar="output_dir",
+        help="Output directory, where netcdf files for mHM >6.0 are stored"
+        ", default: {}".format(OUT_DIR),
+    )
 
     return parser.parse_args()
 
@@ -87,9 +102,22 @@ def get_all_subfiles(path, relation=None):
 
 # CLASSES
 class MyAsciiToNetcdfConverter(object):
-    POSSIBLE_LOOKUP_MODES = ['dims_as_col', 'dims_in_col']
-    def __init__(self, input_file, output_file, lookup=None, sel=None, name=None, attrs=None, values_dtype=int,
-                 iterate={}, csv_lut=False, lookup_mode='dims_in_col', lookup_nrows=None):
+    POSSIBLE_LOOKUP_MODES = ["dims_as_col", "dims_in_col"]
+
+    def __init__(
+        self,
+        input_file,
+        output_file,
+        lookup=None,
+        sel=None,
+        name=None,
+        attrs=None,
+        values_dtype=int,
+        iterate={},
+        csv_lut=False,
+        lookup_mode="dims_in_col",
+        lookup_nrows=None,
+    ):
         """
         initializes an object that is capable of handling the voncersion from ascii to netcdf
 
@@ -135,8 +163,13 @@ class MyAsciiToNetcdfConverter(object):
         self.lookup_nrows = lookup_nrows
         self.lookup_mode = lookup_mode
         if self.lookup_mode not in self.POSSIBLE_LOOKUP_MODES:
-            raise Exception('The provided lookup_mode "' + self.lookup_mode + '" is not valid. I must be one of: '
-                            ', '.join(self.POSSIBLE_LOOKUP_MODES))
+            raise Exception(
+                'The provided lookup_mode "'
+                + self.lookup_mode
+                + '" is not valid. I must be one of: , '.join(
+                    self.POSSIBLE_LOOKUP_MODES
+                )
+            )
         self.csv_lut = csv_lut
         self.iterate = iterate
         self.values_dtype = values_dtype
@@ -171,19 +204,23 @@ class MyAsciiToNetcdfConverter(object):
             self.raw_data = numpy.loadtxt(f_in, dtype=self.values_dtype)
 
         # apply nan
-        self.raw_data[self.raw_data == data_meta['NODATA_value']] = numpy.nan
+        self.raw_data[self.raw_data == data_meta["NODATA_value"]] = numpy.nan
 
         # span the coord arrays
-        lats = self._make_coord(data_meta, 'lat')[::-1]
-        lat_attrs = {'standard_name': 'latitude',
-                     'long_name': 'latitude',
-                     'units': 'degrees_north',
-                     'axis': 'Y'}
-        lons = self._make_coord(data_meta, 'lon')
-        lon_attrs = {'standard_name': 'longitude',
-                     'long_name': 'longitude',
-                     'units': 'degrees_east',
-                     'axis': 'X'}
+        lats = self._make_coord(data_meta, "lat")[::-1]
+        lat_attrs = {
+            "standard_name": "latitude",
+            "long_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y",
+        }
+        lons = self._make_coord(data_meta, "lon")
+        lon_attrs = {
+            "standard_name": "longitude",
+            "long_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X",
+        }
         if self.lookup is not None:
             # read the lookup table with the specified columns, set the ID as index, skip initial row
             if self.csv_lut:
@@ -194,43 +231,60 @@ class MyAsciiToNetcdfConverter(object):
                 skiprows = 1
             index_col = [0]
             if self.lookup_mode == self.POSSIBLE_LOOKUP_MODES[1]:
-                index_col.extend([_ for _ in list(self.iterate.values()) if _ is not None])
-            lookup_data = pd.read_csv(self.lookup, skiprows=skiprows, usecols=self.sel, nrows=self.lookup_nrows,
-                                      delim_whitespace=delim_whitespace,
-                                      index_col=index_col)
+                index_col.extend(
+                    [_ for _ in list(self.iterate.values()) if _ is not None]
+                )
+            lookup_data = pd.read_csv(
+                self.lookup,
+                skiprows=skiprows,
+                usecols=self.sel,
+                nrows=self.lookup_nrows,
+                delim_whitespace=delim_whitespace,
+                index_col=index_col,
+            )
             # iteratively build the nc Dataset
-            coords = {'lat': lats, 'lon': lons}
+            coords = {"lat": lats, "lon": lons}
             if self.lookup_mode == self.POSSIBLE_LOOKUP_MODES[1]:
                 # update coord by unique values occuring in additional index col
-                self.iterators = {key: lookup_data.index.get_level_values(value).unique().values for key, value in
-                                  self.iterate.items()}
+                self.iterators = {
+                    key: lookup_data.index.get_level_values(value).unique().values
+                    for key, value in self.iterate.items()
+                }
                 # TODO: the horizon coord needs to get the value of the lower boundary of each layer
                 coords.update(self.iterators)
-                self.data = xr.Dataset({col_name.split('[')[0]: xr.DataArray(data=self._convert_raw(lookup_data[col_name]),
-                                                                             coords=coords,
-                                                                             dims=list(coords.keys()),
-                                                                             name=col_name.split('[')[0],
-                                                                             attrs={'units': col_name.split('[')[-1].rstrip(
-                                                                                 ']')}) for col_name in
-                                        lookup_data.columns},
-                                       attrs=self.attrs)
+                self.data = xr.Dataset(
+                    {
+                        col_name.split("[")[0]: xr.DataArray(
+                            data=self._convert_raw(lookup_data[col_name]),
+                            coords=coords,
+                            dims=list(coords.keys()),
+                            name=col_name.split("[")[0],
+                            attrs={"units": col_name.split("[")[-1].rstrip("]")},
+                        )
+                        for col_name in lookup_data.columns
+                    },
+                    attrs=self.attrs,
+                )
             elif self.lookup_mode == self.POSSIBLE_LOOKUP_MODES[0]:
                 # update coord by additional columns
                 self.iterators = self.iterate
                 coords.update(self.iterators)
-                self.data = xr.DataArray(data=self._convert_raw(lookup_data),
-                                         coords=coords,
-                                         dims=list(coords.keys()),
-                                         name=self.name,
-                                         attrs=self.attrs).sortby(['lon', 'lat'])
+                self.data = xr.DataArray(
+                    data=self._convert_raw(lookup_data),
+                    coords=coords,
+                    dims=list(coords.keys()),
+                    name=self.name,
+                    attrs=self.attrs,
+                ).sortby(["lon", "lat"])
 
         else:
-            self.data = xr.DataArray(data=self.raw_data,
-                                     coords={'lon': lons, 'lat': lats},
-                                     dims=['lat', 'lon'],
-                                     name=self.name,
-                                     attrs=self.attrs,
-                                     ).sortby(['lon', 'lat'])
+            self.data = xr.DataArray(
+                data=self.raw_data,
+                coords={"lon": lons, "lat": lats},
+                dims=["lat", "lon"],
+                name=self.name,
+                attrs=self.attrs,
+            ).sortby(["lon", "lat"])
         self.data.lon.attrs = lon_attrs
         self.data.lat.attrs = lat_attrs
 
@@ -253,11 +307,17 @@ class MyAsciiToNetcdfConverter(object):
             # dynamically append a dimension to data to accommodate new values
             # build slice object for array
             old_slice = tuple(
-                [slice(None) for x in converted_clone.shape] + [numpy.newaxis for x in self.iterators.keys()])
+                [slice(None) for x in converted_clone.shape]
+                + [numpy.newaxis for x in self.iterators.keys()]
+            )
             # build slice object for new dimension
-            new_slice = tuple([numpy.newaxis for x in converted_clone.shape] + [slice(None)])
+            new_slice = tuple(
+                [numpy.newaxis for x in converted_clone.shape] + [slice(None)]
+            )
             # use numpys broadcasting to combine
-            converted_clone = converted_clone[old_slice] * numpy.ones_like(new_axes)[new_slice]
+            converted_clone = (
+                converted_clone[old_slice] * numpy.ones_like(new_axes)[new_slice]
+            )
         if self.iterators:
             if self.lookup_mode == self.POSSIBLE_LOOKUP_MODES[1]:
                 # loop over product of new dims
@@ -265,26 +325,33 @@ class MyAsciiToNetcdfConverter(object):
                     # https://stackoverflow.com/questions/5036816/numpy-lookup-map-or-point
                     # select the slice in the array, convert axes values to their corresponding index values
                     array_slice = tuple(
-                        [slice(None) for x in self.raw_data.shape] + [list(list(self.iterators.values())[i_a]).index(a) for
-                                                                      i_a, a in enumerate(axes)])
+                        [slice(None) for x in self.raw_data.shape]
+                        + [
+                            list(list(self.iterators.values())[i_a]).index(a)
+                            for i_a, a in enumerate(axes)
+                        ]
+                    )
                     # select the slice in the lookup data
                     lookup_slice = tuple([slice(None)] + list(axes))
                     # select the lookup data
                     lookup_sel = series[lookup_slice]
                     # get lookup values and index them by index array
                     # append a nan value because searchsort returns len(lookup_sel.index) if nan is found
-                    converted_clone[array_slice] = lookup_sel.append(pd.Series(numpy.nan)).values[
-                        lookup_sel.index.searchsorted(converted_clone[array_slice])]
+                    converted_clone[array_slice] = lookup_sel.append(
+                        pd.Series(numpy.nan)
+                    ).values[
+                        lookup_sel.index.searchsorted(converted_clone[array_slice])
+                    ]
             elif self.lookup_mode == self.POSSIBLE_LOOKUP_MODES[0]:
                 for index in numpy.unique(self.raw_data[~numpy.isnan(self.raw_data)]):
                     converted_clone[self.raw_data == index] = series.loc[index, :]
         else:
-            #converted_clone = series.values[series.index.searchsorted(converted_clone)]
+            # converted_clone = series.values[series.index.searchsorted(converted_clone)]
             for idx, val in series.iteritems():
                 converted_clone[converted_clone == idx] = val
         return converted_clone
 
-    def _make_coord(self, metas, which='lat'):
+    def _make_coord(self, metas, which="lat"):
         """
         creates array with coordinates based on meta information from asc file header
 
@@ -300,14 +367,13 @@ class MyAsciiToNetcdfConverter(object):
         np.array with corresponding latitude or longitude values
 
         """
-        coord_dict = {'lat': ('yllcorner', 'nrows'), 'lon': ('xllcorner', 'ncols')}
+        coord_dict = {"lat": ("yllcorner", "nrows"), "lon": ("xllcorner", "ncols")}
         ll = metas[coord_dict[which][0]]
         n = metas[coord_dict[which][1]]
-        w = metas['cellsize']
-        return numpy.linspace(start=ll + 0.5 * w,
-                              stop=ll + (n + 0.5) * w,
-                              num=int(n),
-                              endpoint=False)
+        w = metas["cellsize"]
+        return numpy.linspace(
+            start=ll + 0.5 * w, stop=ll + (n + 0.5) * w, num=int(n), endpoint=False
+        )
 
     def _format_path(self, path):
         """
@@ -328,18 +394,21 @@ class MyAsciiToNetcdfConverter(object):
         """
         dumps the data to netcdf file
         """
-        if hasattr(self.data, 'data_vars'):
+        if hasattr(self.data, "data_vars"):
             # if multiple data arrays are contained in dataset, write each in seperate file
             for data_var in self.data.data_vars:
-                output_file = pathlib.Path(self.output_file.parent, data_var + self.output_file.suffix)
+                output_file = pathlib.Path(
+                    self.output_file.parent, data_var + self.output_file.suffix
+                )
                 self.data[data_var].to_netcdf(output_file)
         else:
             # if only dataarray is contained, then set name properly
             self.data.name = self.output_file.stem
             self.data.to_netcdf(self.output_file)
 
+
 # SCRIPT
-if __name__ == '__main__':
+if __name__ == "__main__":
     args = parse_args()
 
     input_dir = pathlib.Path(args.input_dir)
@@ -348,32 +417,51 @@ if __name__ == '__main__':
     path_list = get_all_subfiles(input_dir)
 
     for path in path_list:
-        print('working on file: {}'.format(path))
+        print("working on file: {}".format(path))
         kwargs = {}
-        if path.stem.endswith('_class'):
-            kwargs['lookup'] = pathlib.Path(input_dir, path.parent, path.stem + 'definition.txt')
-            if path.stem == 'LAI_class':
-                #kwargs['csv_lut'] = False
-                kwargs['sel'] = ['ID', 'Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.',
-                                 'Oct.', 'Nov.', 'Dec.']
-                kwargs['lookup_mode'] = 'dims_as_col'
-                kwargs['attrs'] = {'units': '-'}
-                kwargs['iterate'] = {'month_of_year': list(range(1,13))}
-            elif path.stem == 'soil_class':
-                kwargs['iterate'] = {'horizon': 1}
-            elif path.stem == 'geology_class':
-                kwargs['sel'] = ['GeoParam(i)', 'ClassUnit', 'Karstic']
-                kwargs['lookup_nrows'] = 12
-        elif '_class_horizon_' in path.stem:
-            kwargs['lookup'] = pathlib.Path(input_dir, path.parent, 'soil_classdefinition_iFlag_soilDB_1.txt')
-        if path.suffix == '.nc':
-            shutil.copy(pathlib.Path(input_dir, path), pathlib.Path(args.output_dir, path.name))
+        if path.stem.endswith("_class"):
+            kwargs["lookup"] = pathlib.Path(
+                input_dir, path.parent, path.stem + "definition.txt"
+            )
+            if path.stem == "LAI_class":
+                # kwargs['csv_lut'] = False
+                kwargs["sel"] = [
+                    "ID",
+                    "Jan.",
+                    "Feb.",
+                    "Mar.",
+                    "Apr.",
+                    "May",
+                    "Jun.",
+                    "Jul.",
+                    "Aug.",
+                    "Sep.",
+                    "Oct.",
+                    "Nov.",
+                    "Dec.",
+                ]
+                kwargs["lookup_mode"] = "dims_as_col"
+                kwargs["attrs"] = {"units": "-"}
+                kwargs["iterate"] = {"month_of_year": list(range(1, 13))}
+            elif path.stem == "soil_class":
+                kwargs["iterate"] = {"horizon": 1}
+            elif path.stem == "geology_class":
+                kwargs["sel"] = ["GeoParam(i)", "ClassUnit", "Karstic"]
+                kwargs["lookup_nrows"] = 12
+        elif "_class_horizon_" in path.stem:
+            kwargs["lookup"] = pathlib.Path(
+                input_dir, path.parent, "soil_classdefinition_iFlag_soilDB_1.txt"
+            )
+        if path.suffix == ".nc":
+            shutil.copy(
+                pathlib.Path(input_dir, path), pathlib.Path(args.output_dir, path.name)
+            )
         else:
             my_conv = MyAsciiToNetcdfConverter(
                 input_file=pathlib.Path(input_dir, path),
-                output_file=pathlib.Path(args.output_dir, path.stem + '.nc'),
+                output_file=pathlib.Path(args.output_dir, path.stem + ".nc"),
                 values_dtype=float,
-                **kwargs
+                **kwargs,
             )
             my_conv.read()
             my_conv.write()

@@ -12,8 +12,8 @@ log = logging.getLogger(__name__)
 
 # EPSG:152160 is an informal surrogate for IGH; the WCS accepts it as a label
 # but PROJ databases typically do not. Use the PROJ4 definition for local transforms.
-_SG_CRS       = "urn:ogc:def:crs:EPSG::152160"   # for WCS getCoverage calls
-_SG_PROJ4     = "+proj=igh +datum=WGS84 +no_defs" # for local pyproj/geopandas
+_SG_CRS = "urn:ogc:def:crs:EPSG::152160"  # for WCS getCoverage calls
+_SG_PROJ4 = "+proj=igh +datum=WGS84 +no_defs"  # for local pyproj/geopandas
 _SG_RES = 250  # native SoilGrids resolution (metres)
 
 # Six GlobalSoilMap standard depth intervals, labelled 01-06 to match Fortran
@@ -35,7 +35,7 @@ _PROPERTIES: dict[str, tuple[str, str]] = {
 
 
 def _watershed_bbox_homolosine(
-    watershed_path: str
+    watershed_path: str,
 ) -> tuple[float, float, float, float]:
     """Return (minx, miny, maxx, maxy) in Homolosine (EPSG:152160)."""
     gdf = gpd.read_file(watershed_path)
@@ -46,7 +46,10 @@ def _watershed_bbox_homolosine(
     minx, miny, maxx, maxy = gdf_hom.total_bounds
     log.info(
         "Watershed bbox in Homolosine (m): %.0f %.0f %.0f %.0f",
-        minx, miny, maxx, maxy,
+        minx,
+        miny,
+        maxx,
+        maxy,
     )
     return float(minx), float(miny), float(maxx), float(maxy)
 
@@ -105,10 +108,13 @@ def _download_coverage(
                 raise RuntimeError(
                     f"WCS download failed for {cov_id} after {max_retries} attempts"
                 ) from exc
-            wait = backoff ** attempt
+            wait = backoff**attempt
             log.warning(
                 "Attempt %d for %s failed (%s); retrying in %.1f s",
-                attempt, cov_id, exc, wait,
+                attempt,
+                cov_id,
+                exc,
+                wait,
             )
             time.sleep(wait)
 

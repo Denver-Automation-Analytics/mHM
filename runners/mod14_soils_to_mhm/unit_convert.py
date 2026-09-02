@@ -14,9 +14,9 @@ _NODATA = -9999
 
 # Per-property multiplier: raw INT16 → integer unit stored in ASCII grid
 _SCALE: dict[str, float] = {
-    "bd": 10.0,   # raw cg/cm³ → mg/cm³ (lut.py divides by 1000 → g/cm³)
-    "cl": 0.1,    # raw g/kg → integer % (÷10)
-    "sn": 0.1,    # raw g/kg → integer % (÷10)
+    "bd": 10.0,  # raw cg/cm³ → mg/cm³ (lut.py divides by 1000 → g/cm³)
+    "cl": 0.1,  # raw g/kg → integer % (÷10)
+    "sn": 0.1,  # raw g/kg → integer % (÷10)
 }
 
 

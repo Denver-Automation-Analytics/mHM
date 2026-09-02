@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 _CHUNK_SIZE = 32
 
+
 def write_asc(path: Path, header: dict, grid: np.ndarray, nodata: int) -> None:
     """Six-line header + row-major integer grid, north-up (row 0 = northernmost)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,16 +37,17 @@ def write_asc(path: Path, header: dict, grid: np.ndarray, nodata: int) -> None:
     log.info("Wrote %s", path)
 
 
-def write_nc(path: Path, header: dict, grid: np.ndarray, nodata: int,
-             block_size: int = 256) -> None:
+def write_nc(
+    path: Path, header: dict, grid: np.ndarray, nodata: int, block_size: int = 256
+) -> None:
     """Write idgauges as NetCDF formatted for mHM ingestion (EPSG:4326)."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
     ncols = header["ncols"]
     nrows = header["nrows"]
-    cs    = header["cellsize"]
-    xll   = header["xllcorner"]
-    yll   = header["yllcorner"]
+    cs = header["cellsize"]
+    xll = header["xllcorner"]
+    yll = header["yllcorner"]
 
     # Center-of-cell coordinates; y is decreasing (north-up, row 0 = northernmost)
     x_coords = xll + (np.arange(ncols) + 0.5) * cs
@@ -70,14 +72,21 @@ def write_nc(path: Path, header: dict, grid: np.ndarray, nodata: int,
         yv[:] = y_coords
 
         # mHM requires (x, y) dimension order; grid is (nrows, ncols) so transpose
-        dv = ds.createVariable("idgauges", "i4", ("x", "y"),
-                               fill_value=np.int32(nodata),
-                               zlib=True, complevel=4,
-                               chunksizes=(_CHUNK_SIZE, _CHUNK_SIZE))
+        dv = ds.createVariable(
+            "idgauges",
+            "i4",
+            ("x", "y"),
+            fill_value=np.int32(nodata),
+            zlib=True,
+            complevel=4,
+            chunksizes=(_CHUNK_SIZE, _CHUNK_SIZE),
+        )
         dv.coordinates = "x y"
         for row_start in range(0, nrows, block_size):
             row_count = min(block_size, nrows - row_start)
-            block = grid[row_start:row_start + row_count, :]   # (row_count, ncols)
-            dv[:, row_start:row_start + row_count] = block.T   # (ncols, row_count) = (x, y)
+            block = grid[row_start : row_start + row_count, :]  # (row_count, ncols)
+            dv[:, row_start : row_start + row_count] = (
+                block.T
+            )  # (ncols, row_count) = (x, y)
 
     log.info("Wrote %s", path)
