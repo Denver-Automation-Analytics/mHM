@@ -39,6 +39,7 @@ from config import (
     N_ITERATIONS,
     SEED,
     RESUME,
+    GAUGE_DRAINAGE_AREAS_SQMI,
 )
 from pathlib import Path
 
@@ -96,9 +97,18 @@ if ROUTING_CASE is None:
         f"Unexpected ROUTING_METHOD {ROUTING_METHOD!r}. "
         "Must be 'muskingum', 'adaptive', or 'adaptive_varying'."
     )
-SNAP_RADIUS_CELLS = 2  # gauge stream-snap search radius in L0 cells (±)
+SNAP_RADIUS_CELLS = 8  # gauge stream-snap search radius in L0 cells (±)
+# Fraction of the search-window's peak flow accumulation that defines the "major
+# channel". Used only for gauges WITHOUT a known drainage area: the gauge snaps to
+# the nearest such cell, ignoring small tributaries that bend closer while avoiding
+# the downstream drift a plain max-facc pick would cause past a confluence.
+SNAP_CHANNEL_FRACTION = 0.5
 # Minimum flow accumulation (in L0 cells) for a snapped gauge to count as on-channel.
 MIN_CHANNEL_FACC_CELLS = 50
+SQMI_TO_KM2 = 2.589988110336  # exact statute square mile -> km²
+# Max relative mismatch between a gauge's known drainage area and its snapped cell's
+# upstream area before the snap is rejected (guards against wrong coords/area/units).
+AREA_MATCH_TOL = 0.5
 
 REPO_PARAM_NML = "/workspace/mhm_parameter.nml"
 REPO_OUTPUT_NML = "/workspace/mhm_outputs.nml"
@@ -346,14 +356,20 @@ def _resample_ascii_to_l0(src_asc: Path, dem_nc: Path) -> None:
     log.info("Resampled %s → %d×%d @ %d m", src_asc.name, ncols, nrows, int(xres))
 
 
-def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
+def _build_idgauges_asc(
+    morph_dir: Path,
+    gauge_dir: Path,
+    dem_nc: Path,
+    drainage_areas_sqmi: dict[str, float],
+) -> None:
     """Burn gauge local_ids into an L0 ASCII raster in *morph_dir*.
 
-    Reads gauge lat/lon from id_map.csv, projects to LCC, snaps each gauge to
-    the highest-facc valid cell within SNAP_RADIUS_CELLS of the nearest cell
-    (so gauges land on the channel), and writes morph/idgauges.asc.
-    Always rebuilds (a stale file silently corrupts calibration), and validates
-    that every gauge snapped onto a channel before writing.
+    Reads gauge lat/lon from id_map.csv, projects to LCC, and snaps each gauge to
+    a flow-accumulation cell within SNAP_RADIUS_CELLS. When the gauge's USGS site_no
+    is in *drainage_areas_sqmi*, it snaps to the cell whose upstream area best matches
+    that known area (resolving confluences); otherwise it snaps to the nearest major
+    channel. Writes morph/idgauges.asc, always rebuilding (a stale file silently
+    corrupts calibration), and validates every gauge before writing.
     """
     import csv
     import netCDF4 as nc4_mod
@@ -388,16 +404,26 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
 
     grid = np.full((nrows, ncols), -9999, dtype=np.int32)
 
-    # Per-gauge snap record: gid -> (row, col, facc_before, facc_after) or None.
-    placements: dict[int, tuple[int, int, int, int] | None] = {}
+    xres = float(x_l0[1] - x_l0[0])
+    cell_km2 = (xres * xres) / 1e6
+
+    # Per-gauge snap record: gid -> (row, col, facc_before, facc_after, target) or None.
+    placements: dict[int, tuple[int, int, int, int, float | None] | None] = {}
 
     id_map_path = gauge_dir / "id_map.csv"
     with open(id_map_path, newline="") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
             gid = int(row["local_id"])
+            site_no = row["site_no"].strip()
             lon = float(row["lon"])
             lat = float(row["lat"])
+
+            # Known drainage area (if provided) as an expected facc cell count.
+            area_sqmi = drainage_areas_sqmi.get(site_no)
+            target_cells = (
+                area_sqmi * SQMI_TO_KM2 / cell_km2 if area_sqmi is not None else None
+            )
 
             gx, gy = tf.transform(lon, lat)
 
@@ -419,9 +445,30 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
                 min(ncols, ci + SNAP_RADIUS_CELLS + 1),
             )
             win = facc_stream[r0:r1, c0:c1]
-            if win.max() >= 0:
-                lr, lc = np.unravel_index(int(np.argmax(win)), win.shape)
-                sri, sci = r0 + lr, c0 + lc
+            win_max = int(win.max())
+            if win_max >= 0:
+                rows_w, cols_w = np.nonzero(win >= 0)  # valid cells in the window
+                faccs = win[rows_w, cols_w].astype(np.int64)
+                d2 = (rows_w + r0 - ri) ** 2 + (cols_w + c0 - ci) ** 2
+                if target_cells is not None:
+                    # Known area: snap to the cell whose upstream area best matches it
+                    # (tie-break on distance). This lands on the correct side of a
+                    # confluence, which a facc-only heuristic cannot distinguish.
+                    order = np.lexsort((d2, np.abs(faccs - target_cells)))
+                else:
+                    # No area given: nearest cell on the major channel (>= a fraction
+                    # of the window peak). Avoids downstream drift from a plain max-facc
+                    # pick and small-tributary snaps from nearest-on-any-channel.
+                    channel_thresh = max(
+                        MIN_CHANNEL_FACC_CELLS, SNAP_CHANNEL_FRACTION * win_max
+                    )
+                    on_channel = faccs >= channel_thresh
+                    if not on_channel.any():  # no real channel in reach; keep the peak
+                        on_channel = faccs >= win_max
+                    d2_masked = np.where(on_channel, d2, d2.max() + 1)
+                    order = np.lexsort((-faccs, d2_masked))
+                best = int(order[0])
+                sri, sci = int(rows_w[best] + r0), int(cols_w[best] + c0)
                 if (sri, sci) != (ri, ci):
                     log.info(
                         "Gauge %d snapped (%d,%d)→(%d,%d)  facc %d→%d",
@@ -439,6 +486,7 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
                     sci,
                     int(facc_stream[ri, ci]),
                     int(facc_stream[sri, sci]),
+                    target_cells,
                 )
             elif valid[ri, ci]:
                 grid[ri, ci] = gid
@@ -447,11 +495,11 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
                     ci,
                     int(facc_stream[ri, ci]),
                     int(facc_stream[ri, ci]),
+                    target_cells,
                 )
             else:
                 placements[gid] = None
 
-    xres = float(x_l0[1] - x_l0[0])
     xll = float(x_l0[0]) - xres / 2
     yll = float(y_l0[-1]) - xres / 2
 
@@ -465,19 +513,42 @@ def _build_idgauges_asc(morph_dir: Path, gauge_dir: Path, dem_nc: Path) -> None:
             log.warning("  gauge %d: NOT PLACED (projected outside valid domain)", gid)
             problems.append(f"gauge {gid}: not placed (outside valid domain)")
             continue
-        sri, sci, f0, f1 = info
+        sri, sci, f0, f1, target = info
         area = f1 * cell_km2
         flag = "OK" if f1 >= MIN_CHANNEL_FACC_CELLS else "OFF-CHANNEL"
-        log.info(
-            "  gauge %d: (%d,%d) facc %d→%d  area %.1f km²  [%s]",
-            gid,
-            sri,
-            sci,
-            f0,
-            f1,
-            area,
-            flag,
-        )
+        if target is not None:
+            exp_area = target * cell_km2
+            area_err = abs(f1 - target) / target
+            log.info(
+                "  gauge %d: (%d,%d) facc %d→%d  area %.1f km² (expected %.1f km², "
+                "%.1f%% off)  [%s]",
+                gid,
+                sri,
+                sci,
+                f0,
+                f1,
+                area,
+                exp_area,
+                area_err * 100.0,
+                flag,
+            )
+            if area_err > AREA_MATCH_TOL:
+                problems.append(
+                    f"gauge {gid}: snapped area {area:.1f} km² is {area_err * 100:.0f}% "
+                    f"off the expected {exp_area:.1f} km² (> {AREA_MATCH_TOL * 100:.0f}%); "
+                    "check gauge coordinates, drainage area, or search radius"
+                )
+        else:
+            log.info(
+                "  gauge %d: (%d,%d) facc %d→%d  area %.1f km²  [%s]",
+                gid,
+                sri,
+                sci,
+                f0,
+                f1,
+                area,
+                flag,
+            )
         if f1 < MIN_CHANNEL_FACC_CELLS:
             problems.append(
                 f"gauge {gid}: snapped facc {f1} cells (< {MIN_CHANNEL_FACC_CELLS}); "
@@ -697,7 +768,9 @@ def main() -> None:
     # Phase 2b — resample ASCII inputs to L0
     dem_nc = inp / "morph" / "dem.nc"
     _resample_ascii_to_l0(inp / "morph" / "soil_class.asc", dem_nc)
-    _build_idgauges_asc(inp / "morph", inp / "gauge", dem_nc)
+    _build_idgauges_asc(
+        inp / "morph", inp / "gauge", dem_nc, GAUGE_DRAINAGE_AREAS_SQMI
+    )
     _ensure_latlon_nc(inp / "latlon", dem_nc, resolution)
 
     # Phase 3 — generate mhm.nml

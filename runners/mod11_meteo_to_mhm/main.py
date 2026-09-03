@@ -7,6 +7,10 @@ NetCDF files for precipitation, temperature, wind speed, relative humidity, and
 shortwave/longwave radiation. Also writes a header.txt file for each variable and
 a latlon.nc file for the clipped grid.
 
+Login to the Icechunk Zarr repository is required
+
+arraylake auth login
+
 Output cadence follows config.TIMESTEP: "hourly" writes the native HRRR steps,
 "daily" aggregates each calendar day (fluxes summed, states averaged).
 """
