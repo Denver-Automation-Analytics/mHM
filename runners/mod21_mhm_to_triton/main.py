@@ -27,6 +27,7 @@ from config import (
     OUTPUT_CRS,
     TIMESTEP,
     TRITON_HYDROGRAPH_INTERVAL_S,
+    DOMAIN_NAME,
     WORKING_DIR,
     IO_MANNING_N,
     TRITON_BF_CHANNEL_KM2,
@@ -42,7 +43,6 @@ from config import (
     TRITON_ONSET_MM_HR,
     TRITON_START_FILE,
     TRITON_DEM_CELLSIZE_M,
-    TRITON_DOMAIN_NAME,
     TRITON_END_DATE,
     TRITON_INIT_FILL,
     TRITON_INIT_FILL_MAX_H,
@@ -91,7 +91,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir", default=TRITON_OUT_DIR, help="output directory for TRITON inputs"
     )
     p.add_argument(
-        "--name", default=TRITON_DOMAIN_NAME, help="basename for the TRITON files"
+        "--name", default=DOMAIN_NAME, help="basename for the TRITON files"
     )
     p.add_argument(
         "--cellsize",

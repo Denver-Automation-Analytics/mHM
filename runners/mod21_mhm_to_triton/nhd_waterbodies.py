@@ -29,6 +29,9 @@ logging.basicConfig(
 log = logging.getLogger("nhd_waterbodies")
 
 FALLBACK_PAGE_SIZE = 1000
+QUERY_MIN_INTERVAL_S = 1.05
+QUERY_QUOTA_RETRIES = 3
+QUERY_QUOTA_WAIT_S = 60.0
 
 # NHD FType (3-digit) -> class name (USGS NHD data dictionary). Used to filter classes.
 NHD_FTYPE = {
@@ -171,14 +174,27 @@ def _query_page(session, layer_url, envelope, query_sr, out_sr, offset, page_siz
         "resultRecordCount": page_size,
         "f": "geojson",
     }
-    resp = session.post(layer_url + "/query", data=params, timeout=120)
-    resp.raise_for_status()
-    payload = resp.json()
-    if "error" in payload:
-        raise RuntimeError(
-            f"Query error ({layer_url}, offset {offset}): {payload['error']}"
+    for attempt in range(QUERY_QUOTA_RETRIES + 1):
+        resp = session.post(layer_url + "/query", data=params, timeout=120)
+        resp.raise_for_status()
+        payload = resp.json()
+        error = payload.get("error")
+        if not error:
+            return payload
+        if error.get("code") != 429 or attempt == QUERY_QUOTA_RETRIES:
+            raise RuntimeError(
+                f"Query error ({layer_url}, offset {offset}): {error}"
+            )
+        log.warning(
+            "ArcGIS geometry quota reached at offset %d; retrying in %.0f seconds (%d/%d).",
+            offset,
+            QUERY_QUOTA_WAIT_S,
+            attempt + 1,
+            QUERY_QUOTA_RETRIES,
         )
-    return payload
+        time.sleep(QUERY_QUOTA_WAIT_S)
+
+    raise RuntimeError(f"Query retries exhausted ({layer_url}, offset {offset})")
 
 
 def _fetch_layer(
@@ -207,7 +223,7 @@ def _fetch_layer(
         if not exceeded or not features:
             break
         offset += page_size
-        time.sleep(0.2)
+        time.sleep(QUERY_MIN_INTERVAL_S)
     if not frames:
         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_sr}")
     return gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=f"EPSG:{out_sr}")
