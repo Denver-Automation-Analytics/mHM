@@ -821,8 +821,19 @@ def main() -> None:
     _sync_geoparameter(domain / "mhm_parameter.nml", inp / "morph")
 
     # RESUME: reseed DDS start values from the previous run's FinalParam.nml.
+    final_nml = domain / "FinalParam.nml"
     if RESUME:
-        _apply_resume(domain / "mhm_parameter.nml", domain / "FinalParam.nml")
+        _apply_resume(domain / "mhm_parameter.nml", final_nml)
+
+    # Preserve previous results for inspection, but require this invocation to create
+    # its own final files before a signal can be classified as an at-exit failure.
+    for name in ("FinalParam.nml", "FinalParam.out"):
+        previous = domain / name
+        if previous.exists():
+            archived = domain / f"{name}.precal"
+            shutil.copy2(previous, archived)
+            previous.unlink()
+            log.info("Archived previous result → %s", archived)
 
     # Phase 5 — run mHM calibration
     log.info("Launching mHM calibration: %s  (cwd=%s)", MHM_BINARY, domain)
@@ -847,10 +858,9 @@ def main() -> None:
         log.info("[mhm] %s", line.rstrip())
     proc.wait()
 
-    final_nml = domain / "FinalParam.nml"
     # mHM can crash in its at-exit cleanup (SIGABRT/SIGSEGV, negative code) AFTER writing
-    # FinalParam.nml; treat that as success if the calibrated file exists. A positive exit
-    # code is a real mHM error.
+    # a new FinalParam.nml; prior results were removed above, so existence proves freshness.
+    # A positive exit code is a real mHM error.
     if proc.returncode < 0 and final_nml.exists():
         log.warning(
             "mHM terminated by signal %d after writing FinalParam.nml; "

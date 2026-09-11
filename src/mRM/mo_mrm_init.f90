@@ -339,7 +339,7 @@ CONTAINS
           iDomain, &
           L11_netPerm(s11 : e11), & ! routing order at L11
           L11_fromN(s11 : e11), & ! link source at L11
-          L11_length(s11 : e11 - 1), & ! link length
+          L11_length(s11 : e11 - L11_nOutlets(iDomain)), & ! link length
           level11(iDomain)%nCells - L11_nOutlets(iDomain), &
           level11(iDomain)%nCells, &
           level11(iDomain)%nrows, &

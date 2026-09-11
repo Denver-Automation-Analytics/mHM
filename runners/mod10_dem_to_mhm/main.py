@@ -30,7 +30,7 @@ from osgeo import gdal
 from pyproj import CRS as ProjCRS
 import rasterio
 from rasterio import features
-from shapely.geometry import shape, Point, box
+from shapely.geometry import shape, box
 from shapely.ops import unary_union
 
 from clip import clip_mosaic
@@ -290,6 +290,17 @@ def _warp_to_l0(
 # overflow D8 codes (0=E,1=NE,2=N,3=NW,4=W,5=SW,6=S,7=SE) → ArcGIS powers-of-2 (mHM)
 _OVERFLOW_TO_ARCGIS = {0: 1, 1: 128, 2: 64, 3: 32, 4: 16, 5: 8, 6: 4, 7: 2}
 
+_ARCGIS_D8_OFFSETS = {
+    1: (0, 1),
+    2: (1, 1),
+    4: (1, 0),
+    8: (1, -1),
+    16: (0, -1),
+    32: (-1, -1),
+    64: (-1, 0),
+    128: (-1, 1),
+}
+
 
 def _remap_fdir_to_arcgis(fdir_nc: str) -> None:
     """Remap fdir.nc from overflow's 0-7 D8 codes to ArcGIS powers-of-2 in place.
@@ -325,60 +336,96 @@ def _write_fdir_arcgis(src_tif: str, dst_tif: str) -> None:
                 d.write(out, 1, window=win)
 
 
-def _delineate_and_mask_watershed(
-    l0_dir: str, morph_dir: str, buffer_m: float, domain_out: str
-) -> None:
-    """Delineate the true basin upstream of the max-facc outlet with overflow,
-    mask every L0 morphology grid to it, and write the buffered basin polygon.
+def _rasterize_domain_mask(domain: gpd.GeoDataFrame, shape, transform) -> np.ndarray:
+    """Rasterize the unbuffered model domain on the canonical L0 grid."""
+    geoms = [geom for geom in domain.geometry if geom is not None and not geom.is_empty]
+    if not geoms:
+        raise ValueError(f"Domain file contains no usable geometry: {DOMAIN_FILE}")
+    if any(not geom.is_valid for geom in geoms):
+        raise ValueError(f"Domain file contains invalid geometry: {DOMAIN_FILE}")
+    return features.rasterize(
+        ((geom, 1) for geom in geoms),
+        out_shape=shape,
+        transform=transform,
+        fill=0,
+        default_value=1,
+        all_touched=True,
+        dtype="uint8",
+    ).astype(bool)
 
-    Guarantees consistent dem/fdir masks: after masking, every basin cell drains
-    to the single outlet (whose flow-dir is set to 0 = mHM outlet), so no cell
-    routes into nodata. Required for Muskingum routing (processCase(8)=1).
-    """
 
-    fdir_l0 = os.path.join(l0_dir, "fdir_l0.tif")
+def _set_boundary_outlets(fdir: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, int]:
+    """Set ArcGIS D8 cells whose downstream target leaves mask to outlet code 0."""
+    if fdir.shape != mask.shape:
+        raise ValueError(f"Flow-direction shape {fdir.shape} != mask shape {mask.shape}")
+
+    valid_codes = np.array([0, *_ARCGIS_D8_OFFSETS], dtype=fdir.dtype)
+    invalid = mask & ~np.isin(fdir, valid_codes)
+    if invalid.any():
+        values = np.unique(fdir[invalid]).tolist()
+        raise ValueError(f"Invalid ArcGIS flow-direction codes inside HUC8: {values}")
+
+    out = fdir.copy()
+    nrows, ncols = mask.shape
+    for code, (row_offset, col_offset) in _ARCGIS_D8_OFFSETS.items():
+        rows, cols = np.where(mask & (fdir == code))
+        target_rows = rows + row_offset
+        target_cols = cols + col_offset
+        in_grid = (
+            (target_rows >= 0)
+            & (target_rows < nrows)
+            & (target_cols >= 0)
+            & (target_cols < ncols)
+        )
+        crosses_boundary = ~in_grid
+        crosses_boundary[in_grid] = ~mask[
+            target_rows[in_grid], target_cols[in_grid]
+        ]
+        out[rows[crosses_boundary], cols[crosses_boundary]] = 0
+    return out, int(np.count_nonzero(mask & (out == 0)))
+
+
+def _mask_to_original_domain(l0_dir: str, morph_dir: str, domain_out: str) -> None:
+    """Mask all L0 morphology grids to the original HUC8 and retain all outlets."""
     facc_l0 = os.path.join(l0_dir, "facc_l0.tif")
+    with rasterio.open(facc_l0) as reference:
+        transform = reference.transform
+        crs = reference.crs
+        raster_shape = reference.shape
 
-    with rasterio.open(facc_l0) as f:
-        facc = f.read(1)
-        transform = f.transform
-        crs = f.crs
-    orow, ocol = map(
-        int,
-        np.unravel_index(
-            int(np.argmax(np.where(np.isfinite(facc), facc, -1))), facc.shape
-        ),
-    )
-    ox, oy = rasterio.transform.xy(transform, orow, ocol)
+    domain = load_domain(buffer_m=0, crs=crs)
+    mask = _rasterize_domain_mask(domain, raster_shape, transform)
+    if not mask.any():
+        raise ValueError("Original HUC8 does not intersect the L0 grid")
 
-    # overflow labels basins from a pour-point vector file (uses fdir's 0-7 codes)
-    ws_tif = os.path.join(l0_dir, "watershed_l0.tif")
-    pour = os.path.join(l0_dir, "pour_point.gpkg")
-
-    gpd.GeoDataFrame({"id": [1]}, geometry=[Point(ox, oy)], crs=crs).to_file(
-        pour, driver="GPKG"
-    )
-    overflow.label_watersheds_from_file(fdir_l0, pour, ws_tif, all_basins=False)
-
-    with rasterio.open(ws_tif) as w:
-        labels = w.read(1)
-    mask = labels == labels[orow, ocol]
-    area_km2 = int(mask.sum()) * (L0_CELL_SIZE_M**2) / 1e6
-    print(
-        f"  Basin: {int(mask.sum())} cells ({area_km2:.0f} km2), outlet=(r{orow},c{ocol})"
-    )
-
-    # Mask each morphology grid to the basin; set the outlet flow-dir to 0 (outlet)
+    outlet_count = 0
     for var in ("dem", "slope", "aspect", "fdir", "facc"):
         path = os.path.join(morph_dir, f"{var}.nc")
         with nc4.Dataset(path, "r+") as ds:
-            fv = ds[var]._FillValue
-            arr = np.where(mask, np.array(ds[var][:]), fv)
+            data = ds[var][:]
+            if data.shape != mask.shape:
+                raise ValueError(f"{var}.nc shape {data.shape} != L0 shape {mask.shape}")
+            missing = np.ma.getmaskarray(data)
+            values = np.asarray(data.filled(ds[var]._FillValue))
+            if np.issubdtype(values.dtype, np.floating):
+                missing |= ~np.isfinite(values)
+            missing_inside = mask & missing
+            if var == "aspect" and missing_inside.any():
+                values[missing_inside] = 0.0
+                missing[missing_inside] = False
+                print(
+                    f"  Set {int(missing_inside.sum())} undefined flat-cell "
+                    "aspect values to 0 degrees"
+                )
+                missing_inside = mask & missing
+            if missing_inside.any():
+                raise ValueError(
+                    f"{var}.nc has {int(missing_inside.sum())} missing HUC8 cells"
+                )
             if var == "fdir":
-                arr[orow, ocol] = 0
-            ds[var][:] = arr
+                values, outlet_count = _set_boundary_outlets(values, mask)
+            ds[var][:] = np.where(mask, values, ds[var]._FillValue)
 
-    # Write the buffered basin polygon as the domain boundary
     geoms = [
         shape(g)
         for g, v in features.shapes(
@@ -386,12 +433,19 @@ def _delineate_and_mask_watershed(
         )
         if v == 1
     ]
-    gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[unary_union(geoms)], crs=crs)
-    if buffer_m:
-        gdf["geometry"] = gdf.geometry.buffer(buffer_m)
+    gdf = gpd.GeoDataFrame(
+        {"id": [1], "source_method": ["original_huc8_l0_mask"]},
+        geometry=[unary_union(geoms)],
+        crs=crs,
+    )
     os.makedirs(os.path.dirname(domain_out), exist_ok=True)
     gdf.to_file(domain_out, driver="GeoJSON")
-    print(f"  Wrote basin boundary (+{buffer_m:.0f} m buffer): {domain_out}")
+    area_km2 = int(mask.sum()) * abs(transform.a * transform.e) / 1e6
+    print(
+        f"  HUC8: {int(mask.sum())} cells ({area_km2:.0f} km2), "
+        f"{outlet_count} outlet(s)"
+    )
+    print(f"  Wrote grid-aligned HUC8 boundary: {domain_out}")
 
 
 def main():
@@ -571,13 +625,12 @@ def main():
     )
     _remap_fdir_to_arcgis(f"{MORPH_DIR}/fdir.nc")
 
-    # 6. Delineate the true basin (overflow) and mask morphology so dem/fdir masks
-    #    are consistent and every cell drains to the single outlet.
-    print("Delineating true basin boundary and masking morphology...")
-    _delineate_and_mask_watershed(
+    # 6. Mask morphology to the original HUC8. Boundary-crossing flow paths become
+    #    outlets; mHM supports multiple outlets within one routed domain.
+    print("Masking morphology to the original HUC8 boundary...")
+    _mask_to_original_domain(
         l0_dir,
         MORPH_DIR,
-        DOMAIN_BUFFER_M,
         os.path.join(WORKING_DIR, "mhm_input/domain/watershed.geojson"),
     )
 

@@ -57,7 +57,7 @@ IO_MANNING_N = {
     11: 0.040,  # Rangeland
 }
 TRITON_START_DATE = "2024-01-20"  # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
-TRITON_END_DATE = "2024-01-30"  # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
+TRITON_END_DATE = "2024-01-25"  # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_AUTO_START = True  # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
 TRITON_ONSET_MM_HR = 0  # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
 TRITON_START_FILE = f"{TRITON_OUT_DIR}/{DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes

@@ -255,6 +255,8 @@ def read_discharge(discharge_nc: Path, gauge_dir: Path, window=None) -> Dict:
         )
         qobs[qobs <= -9990.0] = np.nan
         qsim[qsim <= -9990.0] = np.nan
+        if not np.isfinite(qobs).any():
+            qobs = _read_gauge_obs(gauge_dir / f"{int(lid)}.txt", time)
         gauges.append(
             {
                 "local_id": int(lid),
