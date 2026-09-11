@@ -9,6 +9,7 @@ interval, which is what surfaces load imbalance or solver slowdowns.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -17,6 +18,11 @@ import pandas as pd
 
 _STEP_RE = re.compile(r"^performance(\d+)\.txt$")
 DELTA_COLS = ("Compute", "MPI", "IO", "Resize", "Other")
+log = logging.getLogger("triton_to_map")
+
+
+def _progress_due(done: int, total: int) -> bool:
+    return done == 1 or done == total or done % max(1, (total + 9) // 10) == 0
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -33,15 +39,20 @@ def read_summary(path: Path) -> pd.DataFrame:
 def read_series(perf_dir: Path) -> pd.DataFrame:
     """Return cumulative per-step, per-rank timings from performance/*.txt."""
     rows = []
-    for p in Path(perf_dir).glob("performance*.txt"):
+    paths = sorted(
+        (p for p in Path(perf_dir).glob("performance*.txt") if _STEP_RE.match(p.name)),
+        key=lambda p: int(_STEP_RE.match(p.name).group(1)),
+    )
+    log.info("Reading performance series: 0/%d files", len(paths))
+    for file_number, p in enumerate(paths, start=1):
         m = _STEP_RE.match(p.name)
-        if not m:
-            continue
         df = _read_csv(p)
         df = df[df["Rank"] != "Average"].copy()
         df["Rank"] = df["Rank"].astype(int)
         df["step"] = int(m.group(1))
         rows.append(df)
+        if _progress_due(file_number, len(paths)):
+            log.info("Reading performance series: %d/%d files", file_number, len(paths))
     if not rows:
         raise FileNotFoundError(f"No performanceN.txt files found in {perf_dir}")
     return (
@@ -72,11 +83,23 @@ def wet_stats(nc_path: Path, var: str, nodata: float) -> pd.DataFrame:
         n = v.shape[0]
         n_wet = np.empty(n, dtype=np.int64)
         volume = np.empty(n, dtype=np.float64)
+        log.info(
+            "Computing wet-cell statistics from %s: 0/%d timesteps",
+            nc_path.name,
+            n,
+        )
         for i in range(n):
             arr = np.asarray(v[i], dtype=np.float32)
             valid = arr[arr != np.float32(nodata)]
             n_wet[i] = valid.size
             volume[i] = float(valid.sum())
+            if _progress_due(i + 1, n):
+                log.info(
+                    "Computing wet-cell statistics from %s: %d/%d timesteps",
+                    nc_path.name,
+                    i + 1,
+                    n,
+                )
     finally:
         ds.close()
     return pd.DataFrame(

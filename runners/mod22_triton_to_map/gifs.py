@@ -20,6 +20,7 @@ continuous one).
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -33,6 +34,12 @@ from matplotlib.colors import PowerNorm
 from PIL import Image
 
 from writers import VAR_META
+
+log = logging.getLogger("triton_to_map")
+
+
+def _progress_due(done: int, total: int) -> bool:
+    return done == 1 or done == total or done % max(1, (total + 9) // 10) == 0
 
 
 def _frame_indices(n: int, max_frames: int) -> np.ndarray:
@@ -73,10 +80,19 @@ def make_gif(
         # True max over the shown frames (not a percentile clip): keeps the
         # colorbar honest about the real depth range instead of saturating it.
         vmax = 1.0
-        for t in idx:
+        n_frames = len(idx)
+        log.info("GIF %s range scan: 0/%d frames", var, n_frames)
+        for frame_number, t in enumerate(idx, start=1):
             arr = read(t)
             if arr.count():
                 vmax = max(vmax, float(arr.max()))
+            if _progress_due(frame_number, n_frames):
+                log.info(
+                    "GIF %s range scan: %d/%d frames",
+                    var,
+                    frame_number,
+                    n_frames,
+                )
 
         var_cmap = copy.copy(matplotlib.colormaps[cmap])
         var_cmap.set_bad(alpha=0.0)  # NODATA/dry cells: hillshade shows through
@@ -114,7 +130,8 @@ def make_gif(
         canvas = fig.canvas
         base_palette = None
         pil_frames = []
-        for t in idx:
+        log.info("GIF %s rendering: 0/%d frames", var, n_frames)
+        for frame_number, t in enumerate(idx, start=1):
             im.set_array(read(t))
             title.set_text(f"{meta.get('long_name', var)}  {times[t]:%Y-%m-%d %H:%M}")
             canvas.draw()
@@ -127,8 +144,13 @@ def make_gif(
                 pil_frames.append(
                     frame.quantize(palette=base_palette, dither=Image.Dither.NONE)
                 )
+            if _progress_due(frame_number, n_frames):
+                log.info(
+                    "GIF %s rendering: %d/%d frames", var, frame_number, n_frames
+                )
         plt.close(fig)
 
+        log.info("GIF %s encoding %d frames to %s", var, n_frames, out_gif)
         pil_frames[0].save(
             out_gif,
             save_all=True,

@@ -8,6 +8,7 @@ one timestep slice at a time so the full space-time cube is never held in memory
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -18,6 +19,7 @@ import pandas as pd
 from osgeo import gdal
 
 gdal.UseExceptions()
+log = logging.getLogger("triton_to_map")
 
 # TRITON spatial output variables, in the order they are consolidated/derived.
 BASE_VARS = ("H", "MH", "QX", "QY")
@@ -69,6 +71,39 @@ def read_grid(vrt: Path) -> Dict:
         if code:
             epsg = f"{srs.GetAuthorityName(None)}:{code}"
     return {"nx": nx, "ny": ny, "gt": gt, "wkt": wkt, "epsg": epsg, "x": x, "y": y}
+
+
+def read_grid_from_netcdf(nc_path: Path) -> Dict:
+    """Read grid geometry and CRS from a prepared mod22 netCDF cube."""
+    import netCDF4
+
+    ds = netCDF4.Dataset(nc_path, "r")
+    try:
+        x = np.asarray(ds.variables["x"][:], dtype=float)
+        y = np.asarray(ds.variables["y"][:], dtype=float)
+        if x.size < 2 or y.size < 2:
+            raise ValueError(f"Cannot infer grid spacing from {nc_path}.")
+        dx = float(x[1] - x[0])
+        dy = float(y[1] - y[0])
+        gt = (float(x[0] - dx / 2), dx, 0.0, float(y[0] - dy / 2), 0.0, dy)
+        crs = ds.variables.get("crs")
+        wkt = (
+            getattr(crs, "crs_wkt", getattr(crs, "spatial_ref", ""))
+            if crs is not None
+            else ""
+        )
+        epsg = getattr(crs, "epsg_code", None) if crs is not None else None
+    finally:
+        ds.close()
+    return {
+        "nx": x.size,
+        "ny": y.size,
+        "gt": gt,
+        "wkt": wkt,
+        "epsg": epsg,
+        "x": x,
+        "y": y,
+    }
 
 
 def read_slice(vrt: Path, nx: int, ny: int) -> np.ndarray:
@@ -182,10 +217,26 @@ def max_from_netcdf(nc_path: Path, var: str, nodata: float) -> np.ndarray:
         v = ds.variables[var]
         v.set_auto_maskandscale(False)
         mx = np.full(v.shape[1:], np.nan, dtype=np.float32)
+        n_steps = v.shape[0]
+        log.info(
+            "Scanning %s for %s maximum: 0/%d timesteps",
+            nc_path.name,
+            var,
+            n_steps,
+        )
         for t in range(v.shape[0]):
             arr = np.asarray(v[t], dtype=np.float32)
             arr = np.where(arr == np.float32(nodata), np.float32(np.nan), arr)
             np.fmax(mx, arr, out=mx)
+            done = t + 1
+            if done == 1 or done == n_steps or done % max(1, (n_steps + 9) // 10) == 0:
+                log.info(
+                    "Scanning %s for %s maximum: %d/%d timesteps",
+                    nc_path.name,
+                    var,
+                    done,
+                    n_steps,
+                )
     finally:
         ds.close()
     return mx

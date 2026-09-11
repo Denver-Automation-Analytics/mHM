@@ -13,7 +13,7 @@ space-time cube is streamed one timestep at a time, so arbitrarily long/large
 TRITON runs are handled without loading the whole cube into memory. Outputs keep
 the native CRS and grid of the TRITON ``.vrt`` (no reprojection).
 
-H.gif/MH.gif/V.gif animations are also rendered over a DEM hillshade, subsampled
+H.gif/MH.gif animations are also rendered over a DEM hillshade, subsampled
 to a bounded number of frames spanning the full run. TRITON's performance.txt/
 performance/*.txt timing logs are turned into a load-balance figure and a
 per-step time series (next to the H wet-cell/volume series when available) ->
@@ -76,6 +76,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("triton_to_map")
+
+
+def _progress_due(done: int, total: int) -> bool:
+    """Return true at the first, last, and roughly every 10% of a loop."""
+    return done == 1 or done == total or done % max(1, (total + 9) // 10) == 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,6 +220,7 @@ def _consolidate(
 
     ny, nx = grid["ny"], grid["nx"]
     running_max = np.full((ny, nx), np.nan, dtype=np.float32)
+    log.info("Consolidating %s: 0/%d timesteps", var, n_steps)
     ds, data = writers.open_cube(nc_path, var, grid, times, NODATA)
     try:
         for t in range(n_steps):
@@ -223,8 +229,11 @@ def _consolidate(
                 arr = np.where(mask, arr, np.float32(np.nan))
             data[t, :, :] = np.where(np.isfinite(arr), arr, np.float32(NODATA))
             np.fmax(running_max, arr, out=running_max)
+            if _progress_due(t + 1, n_steps):
+                log.info("Consolidating %s: %d/%d timesteps", var, t + 1, n_steps)
     finally:
         ds.close()
+    log.info("Writing maximum GeoTIFF: %s", tif_path)
     writers.write_max_tiff(tif_path, running_max, grid, NODATA)
     log.info("Wrote %s (%d steps) + %s", nc_path.name, n_steps, tif_path.name)
 
@@ -247,6 +256,11 @@ def main() -> int:
         start_file = Path(args.start_file) if args.start_file else None
         if start_file and start_file.exists():
             start_date = start_file.read_text().strip()
+        log.info(
+            "Generating gauge comparisons for %d point(s) from %s",
+            len(TRITON_COMPARE_POINTS),
+            h_nc,
+        )
         written = compare.run(
             TRITON_COMPARE_POINTS,
             h_nc,
@@ -260,19 +274,13 @@ def main() -> int:
         log.info("Compare: wrote %d plot(s) to %s", len(written), args.compare_out)
         return 0
 
-    if not gtiff.is_dir():
-        log.error("gtiff directory not found: %s", gtiff)
-        return 1
-
     out.mkdir(parents=True, exist_ok=True)
-
-    avail = readers.available_vars(gtiff)
-    if not avail:
-        log.error("No TRITON gtiff series (<VAR>_<NN>.vrt) found in %s", gtiff)
-        return 1
-    log.info(
-        "Variables present: %s", ", ".join(f"{v}({len(p)})" for v, p in avail.items())
-    )
+    cached_cubes = {
+        var: path
+        for var in TRITON_GIF_VARS
+        if (path := out / f"{var}.nc").exists() and path.stat().st_size > 0
+    }
+    resume_from_netcdf = bool(cached_cubes) and not args.force
 
     start_file = Path(args.start_file) if args.start_file else None
     if start_file and start_file.exists():
@@ -290,7 +298,25 @@ def main() -> int:
         args.start_date,
     )
 
-    grid = readers.read_grid(next(iter(avail.values()))[0])
+    if resume_from_netcdf:
+        grid = readers.read_grid_from_netcdf(next(iter(cached_cubes.values())))
+        log.info(
+            "Prepared netCDF cubes found (%s); skipping gtiff checks and consolidation.",
+            ", ".join(path.name for path in cached_cubes.values()),
+        )
+    else:
+        if not gtiff.is_dir():
+            log.error("gtiff directory not found: %s", gtiff)
+            return 1
+        avail = readers.available_vars(gtiff)
+        if not avail:
+            log.error("No TRITON gtiff series (<VAR>_<NN>.vrt) found in %s", gtiff)
+            return 1
+        log.info(
+            "Variables present: %s",
+            ", ".join(f"{v}({len(p)})" for v, p in avail.items()),
+        )
+        grid = readers.read_grid(next(iter(avail.values()))[0])
     log.info(
         "Grid: %d x %d cells, CRS %s (native, no reprojection)",
         grid["nx"],
@@ -304,6 +330,7 @@ def main() -> int:
         if not clip.exists():
             log.error("Clip boundary not found: %s", clip)
             return 1
+        log.info("Building watershed mask from %s", clip)
         mask = readers.build_watershed_mask(clip, grid)
         log.info(
             "Clipping maps to %s (%d/%d cells inside)",
@@ -312,60 +339,77 @@ def main() -> int:
             mask.size,
         )
 
-    # H and MH: copied from the gtiff series, masking cells below the depth floor.
-    min_depth = float(args.min_depth)
-    if min_depth > 0 and not args.remax:
-        log.info("Depth-map floor: masking H/MH cells < %.3f m to NODATA", min_depth)
-    for var in ("H", "MH"):
-        paths = avail.get(var)
-        if not paths:
-            log.warning("Variable %s absent; skipping.", var)
-            continue
-        times = readers.build_time_axis(len(paths), args.start_date, interval)
-
-        def producer(t: int, _paths=paths) -> np.ndarray:
-            arr = readers.read_slice(_paths[t], grid["nx"], grid["ny"])
-            if min_depth > 0:
-                arr = np.where(arr >= min_depth, arr, np.float32(np.nan))
-            return arr
-
-        _consolidate(
-            var, producer, len(paths), grid, times, out, args.force, args.remax, mask
-        )
-
-    # V: derived from QX/QY unit discharge and H (only when QX and QY exist).
-    if {"QX", "QY"}.issubset(avail) and "H" in avail:
-        qx, qy, h = avail["QX"], avail["QY"], avail["H"]
-        n = min(len(qx), len(qy), len(h))
-        if not (len(qx) == len(qy) == len(h)):
-            log.warning(
-                "QX/QY/H step counts differ (%d/%d/%d); using first %d.",
-                len(qx),
-                len(qy),
-                len(h),
-                n,
-            )
-        times = readers.build_time_axis(n, args.start_date, interval)
-        hmin = float(args.hmin)
-
-        def producer_v(t: int) -> np.ndarray:
-            vx = readers.read_slice(qx[t], grid["nx"], grid["ny"])
-            vy = readers.read_slice(qy[t], grid["nx"], grid["ny"])
-            depth = readers.read_slice(h[t], grid["nx"], grid["ny"])
-            wet = depth >= hmin
-            v = np.full_like(depth, np.nan)
-            np.divide(np.hypot(vx, vy), depth, out=v, where=wet)
-            return v
-
-        _consolidate("V", producer_v, n, grid, times, out, args.force, args.remax, mask)
+    if resume_from_netcdf:
+        if args.remax:
+            for var, nc_path in cached_cubes.items():
+                tif_path = out / f"{var}_max.tif"
+                if tif_path.exists() and tif_path.stat().st_size > 0:
+                    log.info("Skip (exists): %s", tif_path.name)
+                    continue
+                running_max = readers.max_from_netcdf(nc_path, var, NODATA)
+                if mask is not None:
+                    running_max = np.where(mask, running_max, np.float32(np.nan))
+                writers.write_max_tiff(tif_path, running_max, grid, NODATA)
+                log.info("Wrote %s from cached %s", tif_path.name, nc_path.name)
     else:
-        log.warning("QX/QY (and H) not all present; skipping velocity (V).")
+        # H and MH: copied from the gtiff series, masking cells below the depth floor.
+        min_depth = float(args.min_depth)
+        if min_depth > 0 and not args.remax:
+            log.info("Depth-map floor: masking H/MH cells < %.3f m to NODATA", min_depth)
+        for var in ("H", "MH"):
+            paths = avail.get(var)
+            if not paths:
+                log.warning("Variable %s absent; skipping.", var)
+                continue
+            times = readers.build_time_axis(len(paths), args.start_date, interval)
+
+            def producer(t: int, _paths=paths) -> np.ndarray:
+                arr = readers.read_slice(_paths[t], grid["nx"], grid["ny"])
+                if min_depth > 0:
+                    arr = np.where(arr >= min_depth, arr, np.float32(np.nan))
+                return arr
+
+            _consolidate(
+                var, producer, len(paths), grid, times, out, args.force, args.remax, mask
+            )
+
+        # V: derived from QX/QY unit discharge and H (only when QX and QY exist).
+        if {"QX", "QY"}.issubset(avail) and "H" in avail:
+            qx, qy, h = avail["QX"], avail["QY"], avail["H"]
+            n = min(len(qx), len(qy), len(h))
+            if not (len(qx) == len(qy) == len(h)):
+                log.warning(
+                    "QX/QY/H step counts differ (%d/%d/%d); using first %d.",
+                    len(qx),
+                    len(qy),
+                    len(h),
+                    n,
+                )
+            times = readers.build_time_axis(n, args.start_date, interval)
+            hmin = float(args.hmin)
+
+            def producer_v(t: int) -> np.ndarray:
+                vx = readers.read_slice(qx[t], grid["nx"], grid["ny"])
+                vy = readers.read_slice(qy[t], grid["nx"], grid["ny"])
+                depth = readers.read_slice(h[t], grid["nx"], grid["ny"])
+                wet = depth >= hmin
+                v = np.full_like(depth, np.nan)
+                np.divide(np.hypot(vx, vy), depth, out=v, where=wet)
+                return v
+
+            _consolidate(
+                "V", producer_v, n, grid, times, out, args.force, args.remax, mask
+            )
+        else:
+            log.warning("QX/QY (and H) not all present; skipping velocity (V).")
 
     dem = Path(args.dem)
     if not dem.exists():
         log.warning("GIF DEM not found: %s; skipping GIF animations.", dem)
     else:
+        log.info("Preparing GIF hillshade from %s", dem)
         hillshade = readers.read_hillshade(dem, grid)
+        log.info("GIF hillshade ready")
         boundary = (
             readers.read_boundary_line(Path(args.clip), grid) if args.clip else None
         )
@@ -378,6 +422,7 @@ def main() -> int:
             if gif_path.exists() and not args.force:
                 log.info("Skip (exists): %s", gif_path.name)
                 continue
+            log.info("Generating %s from %s", gif_path.name, nc_path.name)
             n_used = gifs.make_gif(
                 nc_path,
                 var,
@@ -394,17 +439,25 @@ def main() -> int:
 
     summary_path = Path(args.perf_summary)
     perf_dir = Path(args.perf_dir)
-    if not summary_path.exists() or not perf_dir.is_dir():
+    if not summary_path.exists():
         log.warning(
-            "TRITON performance logs not found (%s / %s); skipping performance diagnostics.",
+            "TRITON performance summary not found: %s; skipping load-balance plot.",
             summary_path,
-            perf_dir,
         )
     else:
         balance_png = out / "perf_load_balance.png"
+        log.info("Generating load-balance plot from %s", summary_path)
         perf_plots.plot_load_balance(perf.read_summary(summary_path), balance_png)
         log.info("Wrote %s", balance_png.name)
 
+    if not perf_dir.is_dir():
+        log.warning(
+            "TRITON per-step performance directory not found: %s; "
+            "skipping performance time series.",
+            perf_dir,
+        )
+    else:
+        log.info("Generating performance time series from %s", perf_dir)
         deltas = perf.step_deltas(perf.read_series(perf_dir))
         wet_nc = out / f"{TRITON_PERF_WET_VAR}.nc"
         wet = (
@@ -443,8 +496,15 @@ def main() -> int:
             series_dir,
         )
     else:
-        for sf in series_files:
+        log.info("Generating stage hydrographs from %d file(s)", len(series_files))
+        for index, sf in enumerate(series_files, start=1):
             stage_png = out / f"stage_{sf.stem}.png"
+            log.info(
+                "Stage hydrograph %d/%d: %s",
+                index,
+                len(series_files),
+                sf.name,
+            )
             n_pts = series.plot_stage_hydrographs(sf, stage_png, args.start_date)
             log.info("Wrote %s (%d monitoring point(s))", stage_png.name, n_pts)
 

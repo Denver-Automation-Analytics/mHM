@@ -19,6 +19,8 @@ gauge location is not precise enough to pick the intended channel cell.
 
 from __future__ import annotations
 
+import os
+import sys
 import io
 import logging
 from pathlib import Path
@@ -60,6 +62,33 @@ _TZ_OFFSET_H = {
     "HST": -10,
 }
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from config import (
+    END_DATE,
+    L1_CELL_SIZE_M,
+    NODATA,
+    TRITON_COMPARE_OUT_DIR,
+    TRITON_COMPARE_POINTS,
+    TRITON_COMPARE_TZ,
+    TRITON_GIF_CMAP,
+    TRITON_GIF_FPS,
+    TRITON_GIF_MAX_FRAMES,
+    TRITON_GIF_VARS,
+    TRITON_MAP_CFG,
+    TRITON_MAP_CLIP,
+    TRITON_MAP_DEM_TIF,
+    TRITON_MAP_GTIFF_DIR,
+    TRITON_MAP_HMIN,
+    TRITON_MAP_MIN_DEPTH,
+    TRITON_MAP_OUT_DIR,
+    TRITON_MAP_SERIES_DIR,
+    TRITON_PERF_DIR,
+    TRITON_PERF_ROFF,
+    TRITON_PERF_SUMMARY,
+    TRITON_PERF_WET_VAR,
+    TRITON_START_DATE,
+    TRITON_START_FILE,
+)
 
 def _cube_geometry(ds: netCDF4.Dataset) -> Tuple[np.ndarray, np.ndarray, str]:
     """Return the cube's x, y cell-centre axes and its CRS (EPSG string or WKT)."""
@@ -317,3 +346,21 @@ def run(
         log.info("Wrote %s", out_png.name)
         written.append(out_png)
     return written
+
+
+if __name__ == "__main__":
+
+    map_output = Path(TRITON_MAP_OUT_DIR)
+    h_nc = map_output / "H.nc"
+    compare_output = Path(TRITON_COMPARE_OUT_DIR)
+
+    run(
+        points=TRITON_COMPARE_POINTS,
+        h_nc=h_nc,
+        dem_tif=TRITON_MAP_DEM_TIF,
+        tz=TRITON_COMPARE_TZ,
+        start=TRITON_START_DATE,
+        end=END_DATE,
+        nodata=NODATA,
+        out_dir=compare_output,
+    )
