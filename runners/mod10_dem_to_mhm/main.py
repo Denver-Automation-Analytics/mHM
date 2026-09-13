@@ -15,12 +15,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from config import (
     L0_CELL_SIZE_M,
+    L2_CELL_SIZE_M,
     OUTPUT_CRS,
     DOMAIN_FILE,
     DOMAIN_BUFFER_M,
     WORKING_DIR,
     NODATA,
 )
+from mod11_meteo_to_mhm.latlon_grid import mhm_l2_from_l0
 import geopandas as gpd
 import netCDF4 as nc4
 import overflow
@@ -33,8 +35,12 @@ from rasterio import features
 from shapely.geometry import shape, box
 from shapely.ops import unary_union
 
-from clip import clip_mosaic
-from mosaic import mosaic_tiles
+try:
+    from .clip import clip_mosaic
+    from .mosaic import mosaic_tiles
+except ImportError:  # direct script execution
+    from clip import clip_mosaic
+    from mosaic import mosaic_tiles
 
 
 def load_domain(buffer_m=None, crs=None):
@@ -168,6 +174,7 @@ def write_nc(
     var_name: str,
     value_scale: float = 1.0,
     block_size: int = 256,
+    units: str | None = None,
 ):
     """Write a GeoTIFF to a NetCDF file formatted for mHM ingestion.
 
@@ -226,11 +233,13 @@ def write_nc(
             nc_dtype,
             ("y", "x"),
             fill_value=fill_val,
-            chunksizes=(block_size, block_size),
+            chunksizes=(min(block_size, nrows), min(block_size, ncols)),
             zlib=True,
             complevel=4,
         )
         dv.coordinates = "y x"
+        if units is not None:
+            dv.units = units
 
         for row_start in range(0, nrows, block_size):
             row_count = min(block_size, nrows - row_start)
@@ -262,7 +271,7 @@ def _build_l0_grid_from_domain(
     return xmin, ymin, xmax, ymax, cellsize_m, crs_wkt
 
 
-def _warp_to_l0(
+def _warp_to_grid(
     src_tif: str,
     dst_tif: str,
     resample_alg: str,
@@ -273,7 +282,7 @@ def _warp_to_l0(
     cellsize: float,
     crs_wkt: str,
 ) -> None:
-    """Reproject and resample src_tif to the L0 grid, writing dst_tif."""
+    """Reproject and resample src_tif to an exact target grid."""
     gdal.Warp(
         dst_tif,
         src_tif,
@@ -281,10 +290,50 @@ def _warp_to_l0(
         xRes=cellsize,
         yRes=cellsize,
         dstSRS=crs_wkt,
+        dstNodata=NODATA,
         resampleAlg=resample_alg,
         format="GTiff",
+        outputType=gdal.GDT_Float32,
         multithread=True,
     )
+
+
+def _write_l2_dem(
+    dem_l0_tif: str,
+    l0_header: dict,
+    crs_wkt: str,
+    l2_tif: str,
+    l2_nc: str,
+    l2_cellsize: float = L2_CELL_SIZE_M,
+    block_size: int = 32,
+) -> dict:
+    """Average an L0 DEM onto mHM's exact L2 grid and publish NetCDF."""
+    l2 = mhm_l2_from_l0(l0_header, l2_cellsize)
+    l2_xmax = l2["xllcorner"] + l2["ncols"] * l2["cellsize"]
+    l2_ymax = l2["yllcorner"] + l2["nrows"] * l2["cellsize"]
+    os.makedirs(os.path.dirname(l2_tif), exist_ok=True)
+    os.makedirs(os.path.dirname(l2_nc), exist_ok=True)
+    if not os.path.exists(l2_tif):
+        _warp_to_grid(
+            dem_l0_tif,
+            l2_tif,
+            "average",
+            l2["xllcorner"],
+            l2["yllcorner"],
+            l2_xmax,
+            l2_ymax,
+            l2["cellsize"],
+            crs_wkt,
+        )
+    write_nc(
+        l2_tif,
+        l2_nc,
+        dtype="float32",
+        var_name="dem",
+        block_size=block_size,
+        units="m",
+    )
+    return l2
 
 
 # overflow D8 codes (0=E,1=NE,2=N,3=NW,4=W,5=SW,6=S,7=SE) → ArcGIS powers-of-2 (mHM)
@@ -556,7 +605,32 @@ def main():
     for src, dst, alg in _resample_jobs:
         if not os.path.exists(dst):
             print(f"  {os.path.basename(src)} → {os.path.basename(dst)} ({alg})")
-            _warp_to_l0(src, dst, alg, xmin, ymin, xmax, ymax, cellsize, crs_wkt)
+            _warp_to_grid(src, dst, alg, xmin, ymin, xmax, ymax, cellsize, crs_wkt)
+
+    # Produce the elevation field used by mod12 on the exact L2 grid that mHM
+    # and mod11 derive from L0. Use the gap-free pre-mask L0 DEM because the
+    # meteorological grid covers the full rectangular extent.
+    l0_header = {
+        "ncols": int(round((xmax - xmin) / cellsize)),
+        "nrows": int(round((ymax - ymin) / cellsize)),
+        "xllcorner": xmin,
+        "yllcorner": ymin,
+        "cellsize": cellsize,
+        "NODATA_value": NODATA,
+    }
+    l2_dir = os.path.join(DEM_DIR, "l2")
+    l2_tif = os.path.join(l2_dir, "dem_l2.tif")
+    meteo_dem_dir = os.path.join(WORKING_DIR, "mhm_input/meteo/dem")
+    print(f"  dem_l0.tif → dem_l2.tif (average, {L2_CELL_SIZE_M:.0f} m)")
+    _write_l2_dem(
+        os.path.join(l0_dir, "dem_l0.tif"),
+        l0_header,
+        crs_wkt,
+        l2_tif,
+        os.path.join(meteo_dem_dir, "dem.nc"),
+        l2_cellsize=L2_CELL_SIZE_M,
+        block_size=WRITE_CHUNK_SIZE,
+    )
 
     # 4b. Derive flow direction and accumulation on the L0 DEM.
     # Flow direction is categorical and cannot be resampled; recompute it on the

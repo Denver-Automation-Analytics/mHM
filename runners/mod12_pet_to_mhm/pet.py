@@ -80,7 +80,6 @@ def validate_tmin_tmax(tmin, tmax):
 
 
 def pet_calculator(
-    # tavg: np.ndarray,
     lat: np.ndarray,
     time: datetime,
     stat_freq: str,

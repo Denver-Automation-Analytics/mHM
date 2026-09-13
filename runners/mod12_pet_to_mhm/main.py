@@ -1,14 +1,16 @@
 """
 HRRR tavg → mHM PET preparation.
 
-Reads a gridded temperature NetCDF, derives latitude from the companion
-latlon.nc, computes PET via the chosen method, and writes mHM-ready
+Reads gridded meteorology, derives latitude from the companion latlon.nc,
+computes PET via the chosen method, and writes mHM-ready
 ``pet/pet.nc`` and ``pet/header.txt`` output files.
+
+Penman-Monteith requires mod10's L2-aligned ``meteo/dem/dem.nc`` output.
 
 mHM configuration expected:
     process(5)      = 0   (pre-computed PET)
     dir_referenceet = "<domain>/mhm_input/meteo/pet/"
-    iFlag_cordinate_sys = 0   (projected LCC metres; same as mod11)
+    iFlag_cordinate_sys = 0   (projected Albers metres; same as mod11)
 """
 
 from __future__ import annotations
@@ -26,16 +28,28 @@ import pandas as pd
 import xarray as xr
 from joblib import Parallel, delayed
 
-from pet import (
-    METHODS_REQUIRING_TAVG,
-    METHODS_REQUIRING_TMAX_TMIN,
-    _sat_vapor_pressure_kpa,
-    pet_calculator,
-    validate_tmin_tmax,
-)
-from lat_reader import compute_latitude_from_header
-from utils import detect_time_freq, load_header, setup_logging
-from writers import create_pet_nc, write_header_txt, write_pet_chunk
+try:
+    from .pet import (
+        METHODS_REQUIRING_TAVG,
+        METHODS_REQUIRING_TMAX_TMIN,
+        _sat_vapor_pressure_kpa,
+        pet_calculator,
+        validate_tmin_tmax,
+    )
+    from .lat_reader import compute_latitude_from_header
+    from .utils import detect_time_freq, load_header, setup_logging
+    from .writers import create_pet_nc, write_header_txt, write_pet_chunk
+except ImportError:  # direct script execution
+    from pet import (
+        METHODS_REQUIRING_TAVG,
+        METHODS_REQUIRING_TMAX_TMIN,
+        _sat_vapor_pressure_kpa,
+        pet_calculator,
+        validate_tmin_tmax,
+    )
+    from lat_reader import compute_latitude_from_header
+    from utils import detect_time_freq, load_header, setup_logging
+    from writers import create_pet_nc, write_header_txt, write_pet_chunk
 
 # ---------------------------------------------------------------------------
 # USER INPUTS — edit these paths and settings to reconfigure
@@ -58,7 +72,7 @@ SSRD_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/ssrd/ssrd.nc")
 STRD_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/strd/strd.nc")
 WINDSPEED_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/windspeed/windspeed.nc")
 RHAVG_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/rhavg/rhavg.nc")
-DEM_FILE = os.path.join(WORKING_DIR, "mhm_input/dem/dem_corrected.tif")
+DEM_FILE = os.path.join(WORKING_DIR, "mhm_input/meteo/dem/dem.nc")
 # ---------------------------------------------------------------------------
 
 log = logging.getLogger("pet_to_mhm")
@@ -79,20 +93,48 @@ def _detect_tavg_var(ds: xr.Dataset) -> str:
     )
 
 
-def _mean_elevation(dem_path: str) -> float:
-    # block-windowed read to avoid loading the full DEM into RAM
-    import rasterio  # noqa: PLC0415
-
-    with rasterio.open(dem_path) as src:
-        total, count = 0.0, 0
-        for _, window in src.block_windows(1):
-            valid = (
-                src.read(1, window=window, masked=True).compressed().astype(np.float64)
+def _load_l2_elevation(dem_path: str, template: xr.DataArray) -> np.ndarray:
+    """Load elevation as (1, y, x), requiring exact template-grid alignment."""
+    if not Path(dem_path).is_file():
+        raise FileNotFoundError(
+            f"L2 DEM not found: {dem_path}. Run mod10 before Penman-Monteith PET."
+        )
+    spatial_dims = tuple(dim for dim in template.dims if dim != "time")
+    if spatial_dims != ("y", "x"):
+        raise ValueError(
+            f"Meteorology spatial dimensions must be ('y', 'x'); found {spatial_dims}"
+        )
+    with xr.open_dataset(dem_path) as dem_ds:
+        if "dem" not in dem_ds:
+            raise ValueError(
+                f"L2 DEM {dem_path} must contain a 'dem' variable; "
+                f"found {list(dem_ds.data_vars)}"
             )
-            valid = valid[np.isfinite(valid)]
-            total += valid.sum()
-            count += valid.size
-    return total / count if count > 0 else 0.0
+        dem = dem_ds["dem"]
+        if dem.dims != spatial_dims:
+            raise ValueError(
+                f"L2 DEM dimensions {dem.dims} do not match meteorology "
+                f"dimensions {spatial_dims}"
+            )
+        if dem.shape != template.shape[-len(spatial_dims) :]:
+            raise ValueError(
+                f"L2 DEM shape {dem.shape} does not match meteorology "
+                f"shape {template.shape[-len(spatial_dims):]}"
+            )
+        for dim in spatial_dims:
+            if dim not in dem.coords or dim not in template.coords:
+                raise ValueError(f"Missing '{dim}' coordinates needed for grid alignment")
+            dem_coord = np.asarray(dem.coords[dim].values)
+            meteo_coord = np.asarray(template.coords[dim].values)
+            if not np.array_equal(dem_coord, meteo_coord):
+                raise ValueError(
+                    f"L2 DEM '{dim}' coordinates do not match meteorology grid"
+                )
+        elevation = np.asarray(dem.values, dtype=np.float32)
+    if not np.isfinite(elevation).all():
+        invalid_count = int(np.size(elevation) - np.count_nonzero(np.isfinite(elevation)))
+        raise ValueError(f"L2 DEM contains {invalid_count} missing or non-finite cells")
+    return elevation[np.newaxis, :, :]
 
 
 def _compute_pm_inputs(tavg_t, rhavg_t, ssrd_t, strd_t, windspeed_t, dt_s, elevation_m):
@@ -167,10 +209,15 @@ def main() -> None:
     # PM inputs (ssrd, strd, windspeed, rhavg)
     ssrd = strd = windspeed = rhavg = None
     dt_s = 3600.0
-    if DEM_FILE is not None:
-        elevation_m = _mean_elevation(DEM_FILE)
-        log.info("Mean elevation from DEM: %.1f m", elevation_m)
+    elevation_m = None
     if PET_METHOD in {"penman_monteith", "penman-monteith"}:
+        elevation_m = _load_l2_elevation(DEM_FILE, tavg)
+        log.info(
+            "Loaded L2 elevation from %s: range [%.1f, %.1f] m",
+            DEM_FILE,
+            float(elevation_m.min()),
+            float(elevation_m.max()),
+        )
         log.info(
             "Loading PM inputs from %s / %s / %s / %s",
             SSRD_FILE,
