@@ -10,14 +10,14 @@ L0_CELL_SIZE_M = 250  # Landscape detail grid resolution (mod10, mod13, mod14, m
 L1_CELL_SIZE_M = 1000  # Hydrologic simulation grid resolution (i.e., mHM output resolution)
 L2_CELL_SIZE_M = 3000  # Meteorological grid resolution (mod11, mod12)
 OUTPUT_CRS = "EPSG:5070"  # common projected CRS for all spatial outputs
-END_DATE = "2024-01-27"  # forcing/simulation and evaluation end.
+END_DATE = "2024-04-30"  # forcing/simulation and evaluation end.
 EVAL_START_DATE = "2024-01-19"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
 WARMUP_DAYS = 350  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE). Does NOT shift the eval window.
 # forcing/simulation start (earliest date mHM may draw spin-up from), derived as exactly WARMUP_DAYS before EVAL_START_DATE.
 START_DATE = (date.fromisoformat(EVAL_START_DATE) - timedelta(days=WARMUP_DAYS)).isoformat()
 TIMESTEP = "hourly"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
-OPTI_OBJECTIVE = "nse_lnnse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
+OPTI_OBJECTIVE = "nse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
 N_ITERATIONS = 1000  # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED = 32  # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS = 25  # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
@@ -57,7 +57,7 @@ IO_MANNING_N = {
     11: 0.040,  # Rangeland
 }
 TRITON_START_DATE = "2024-01-20"  # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
-TRITON_END_DATE = "2024-01-25"  # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
+TRITON_END_DATE = "2024-01-24"  # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
 TRITON_AUTO_START = True  # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
 TRITON_ONSET_MM_HR = 0  # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
 TRITON_START_FILE = f"{TRITON_OUT_DIR}/{DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes

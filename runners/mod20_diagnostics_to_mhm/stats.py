@@ -113,9 +113,16 @@ def precip_stats(inp: Dict, window) -> Dict:
     Reports the domain-mean annual depth, the spatial spread of per-cell annual
     totals, and simple wet-day metrics from the domain-mean daily series.
     """
-    time = inp["time"]
-    years = max((time[-1] - time[0]).days / 365.25, 1e-9)
-    daily = pd.Series(inp["series"]["pre"], index=time)
+    time = pd.DatetimeIndex(inp["time"])
+    precip = pd.Series(inp["series"]["pre"], index=time)
+    daily = precip.resample("D").sum(min_count=1)
+
+    if len(time) > 1:
+        timestep = pd.Series(time[1:] - time[:-1]).median()
+    else:
+        timestep = pd.Timedelta(days=1)
+    duration = time[-1] - time[0] + timestep
+    years = max(duration / pd.Timedelta(days=365.25), 1e-9)
 
     cell_total = inp["fields"]["pre"]  # per-cell sum over window [mm]
     cell_annual = cell_total / years

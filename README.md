@@ -44,42 +44,37 @@ See also the [documentation][5] for detailed instructions to setup mHM.
 
 ## Devcontainer
 
-1. Build the devcontainer in VSCode. This creates a containerized linux environment: 
+1. In VS Code, run **Dev Containers: Rebuild and Reopen in Container**. This creates a containerized Linux environment:
 
-    - Based on continuumio/miniconda3
-    - mhm-dev conda env from conda-forge with all required build deps: compilers (gfortran/gcc/g++), cmake, make ninja, pkg-config, netcdf-fortran, fypp, git.
-    - CMAKE_PREFIX_PATH set to the conda env so CMake resolves NetCDF-Fortran automatically
-    - Default CMake generator: Ninja, output dir: ./build
-    - Pre-installed extensions: Fortran linter, CMake Tools, Python
+    - Based on `continuumio/miniconda3`.
+    - Creates and automatically activates the `mhm-dev` conda environment with all required build dependencies: compilers (gfortran/gcc/g++), CMake, Make, Ninja, pkg-config, NetCDF-Fortran, fypp, and Git.
+    - Sets `CMAKE_PREFIX_PATH` to the conda environment so CMake resolves NetCDF-Fortran automatically.
+    - Configures CMake Tools to use Ninja, write to `./build`, and enable OpenMP.
+    - Installs the Fortran linter, CMake Tools, and Python VS Code extensions.
 
-2. Run the following command in the terminal:
+    No package installation or manual conda activation is required after the container is built. The mHM executable is not built as part of container creation, so compile it once from a terminal in the container:
 
-    cmake -S . -B build -G Ninja
+    ```bash
+    cmake -S . -B build -G Ninja -DCMAKE_WITH_OpenMP=ON
     cmake --build build
+    ```
 
-    - B build tells CMake to put all generated build files in the build directory (out-of-source build).
-    - G Ninja selects Ninja as the build system generator.
-    - cmake --build build uses the generated build system in build (Ninja here) to actually compile and link targets.
+    `-B build` creates an out-of-source build, `-G Ninja` selects Ninja, and `-DCMAKE_WITH_OpenMP=ON` requires OpenMP support. Configuration fails instead of silently producing a serial build if OpenMP is unavailable.
 
-3. Run mHM on the test domain from the terminal:
+2. Confirm OpenMP is enabled in the configured build:
 
+    ```bash
+    grep '^CMAKE_WITH_OpenMP:BOOL=ON$' build/CMakeCache.txt
+    ```
+
+3. Run mHM on the test domain with the desired number of CPU threads (for example, four):
+
+    ```bash
     cd /workspace/test_domain
-    ../build/mhm
+    OMP_NUM_THREADS=4 ../build/mhm
+    ```
 
-4. Run mHM on a pre-calibrated basin from Rokovec et al (2019)
-
-    - Populate the run_mhm_config.json file with the required data paths
-    - Run the script run_mhm.py
-
-    What the script does:
-
-    Validates the config — checks all paths exist, dates are valid, gauge files are present, binary is executable
-    Creates a temp working dir (or work_dir from config if specified) — the calib_001/ folder is never modified
-    Copies mhm_parameter.nml (calibrated parameters) verbatim from calib_001/exe/
-    Patches mhm.nml using regex substitution across 22 keys (directories, dates, timestep, time_step_model_inputs, warming_days) and regenerates the &evaluation_gauges block from the gauges list — supports any number of gauges
-    Patches mhm_outputs.nml to ensure outputFlxState(11)=.TRUE. (L1_total_runoff)
-    Runs the mHM binary via subprocess, streams output, checks for "mHM: Finished!"
-    Reports the output path and lists the NetCDF files produced; cleans up the temp dir unless keep_work_dir: true
+    At startup, mHM reports `OpenMP used.` and the number of threads. Adjust `OMP_NUM_THREADS` for the CPU resources available to the container.
 
 ## License
 
