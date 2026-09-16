@@ -350,7 +350,7 @@ def main() -> None:
 
     log.info("Reading fluxes: %s", flux_nc)
     window = resolve_window(flux_nc, args.spinup_years)
-    log.info("Diagnostics window (full water years): %s .. %s", window[0], window[1])
+    log.info("Diagnostics window: %s .. %s", window[0], window[1])
     flux = read_fluxes(flux_nc, window)
     inp = read_inputs(
         work / "mhm_input/meteo/pre/pre.nc",

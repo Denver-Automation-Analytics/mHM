@@ -11,14 +11,14 @@ L1_CELL_SIZE_M = 1000  # Hydrologic simulation grid resolution (i.e., mHM output
 L2_CELL_SIZE_M = 3000  # Meteorological grid resolution (mod11, mod12)
 OUTPUT_CRS = "EPSG:5070"  # common projected CRS for all spatial outputs
 END_DATE = "2024-04-30"  # forcing/simulation and evaluation end.
-EVAL_START_DATE = "2024-01-19"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
+EVAL_START_DATE = "2023-07-01"  # calibration scoring starts here; keep FIXED so warm-up length changes don't move the scored window
 WARMUP_DAYS = 350  # spin-up days drawn from forcing in [EVAL_START_DATE - WARMUP_DAYS, EVAL_START_DATE). Does NOT shift the eval window.
 # forcing/simulation start (earliest date mHM may draw spin-up from), derived as exactly WARMUP_DAYS before EVAL_START_DATE.
 START_DATE = (date.fromisoformat(EVAL_START_DATE) - timedelta(days=WARMUP_DAYS)).isoformat()
 TIMESTEP = "hourly"  # "hourly" or "daily"; used by mod11, mod12, mod15, mod19
 ROUTING_METHOD = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | "adaptive_varying"
-OPTI_OBJECTIVE = "nse"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
-N_ITERATIONS = 1000  # mod19 DDS optimizer trials; more = better calibration, longer runtime
+OPTI_OBJECTIVE = "kge"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
+N_ITERATIONS = 2000  # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED = 32  # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
 N_OMP_THREADS = 25  # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
 PET_METHOD = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
@@ -58,15 +58,15 @@ IO_MANNING_N = {
 }
 TRITON_START_DATE = "2024-01-20"  # event-window start 'YYYY-MM-DD' for the TRITON runoff subset; with TRITON_AUTO_START it is the earliest allowed start (search lower bound). None = full mHM record
 TRITON_END_DATE = "2024-01-24"  # event-window end 'YYYY-MM-DD' (inclusive); None = full mHM record
-TRITON_AUTO_START = True  # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
+TRITON_AUTO_START = False  # trim the sim start to one mHM step before runoff onset (skip pre-event dry/baseflow steps -> shorter TRITON run); False = start at TRITON_START_DATE
 TRITON_ONSET_MM_HR = 0  # domain-mean runoff intensity [mm/hr] that marks event onset for TRITON_AUTO_START
 TRITON_START_FILE = f"{TRITON_OUT_DIR}/{DOMAIN_NAME}.startdate"  # sidecar mod21 writes with the resolved sim start datetime; mod22 reads it to anchor output time axes
-TRITON_WARM_START = False  # produce warm-start init files (inith/initqx/inityq) seeding channel depth/discharge from mHM pre-event baseflow; False = cold start (no init files, cfg omits them)
+TRITON_WARM_START = True  # produce warm-start init files (inith/initqx/inityq) seeding channel depth/discharge from mHM pre-event baseflow; False = cold start (no init files, cfg omits them)
 TRITON_BF_CHANNEL_KM2 = 0.5  # drainage-area threshold [km2] above which a cell is treated as channel for the baseflow seed
 TRITON_BF_WIDTH_A = 3.0  # channel width w = a * A^b [m] with drainage area A in km2 (downstream hydraulic geometry)
 TRITON_BF_WIDTH_B = 0.5  # width exponent b
 TRITON_BF_SLOPE_MIN = 1e-4  # floor on bed slope [m/m] in the Manning normal-depth calculation
-TRITON_INIT_FILL = True  # expand the baseflow channel seed outward to fill DEM channel storage (False = seed-only)
+TRITON_INIT_FILL = False  # expand the baseflow channel seed outward to fill DEM channel storage (False = seed-only)
 TRITON_INIT_FILL_MAX_H = 0.1  # cap [m] on the level-pool fill depth grown from channel seeds (anti-runaway on flat terrain)
 
 # --- TRITON known-waterbody acquisition + init integration (mod21) ---
@@ -88,15 +88,15 @@ TRITON_MAP_GTIFF_DIR = f"{WORKING_DIR}/triton_output/gtiff"  # directory holding
 TRITON_MAP_OUT_DIR = f"{WORKING_DIR}/triton_output/maps"  # directory that receives the consolidated netCDFs and pixel-max GeoTIFFs
 TRITON_MAP_CFG = f"{WORKING_DIR}/triton_output/cfg/config_1.cfg"  # TRITON .cfg parsed for print_interval (output cadence in seconds)
 TRITON_MAP_HMIN = 0.01  # water-depth floor [m] below which velocity is undefined (masked to NODATA)
-TRITON_MAP_MIN_DEPTH = 0.1  # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
+TRITON_MAP_MIN_DEPTH = 0.01  # depth-map floor [m]; H/MH cells shallower than this are masked to NODATA (0 disables)
 TRITON_MAP_CLIP = f"{WORKING_DIR}/mhm_input/domain/watershed.geojson"  # polygon boundary the maps are clipped to (cells outside -> NODATA); None/"" disables
 TRITON_MAP_DEM_TIF = f"{TRITON_OUT_DIR}/{DOMAIN_NAME}_dem_{OUTPUT_CRS.split(':')[-1]}.tif"  # mod21's warped DEM, reused as the GIF hillshade background
 TRITON_MAP_SERIES_DIR = f"{WORKING_DIR}/triton_output/series"  # directory of TRITON stage time-series files (<name>_at_Xsec.txt) at the observation points
 
 # --- TRITON H/MH/V GIF animations (mod22 --gif) ---
-TRITON_GIF_VARS = ("H", "MH",)  # variables animated as GIFs
+TRITON_GIF_VARS = ("H", "MH", "V")  # variables animated as GIFs
 TRITON_GIF_FPS = 8  # playback frame rate
-TRITON_GIF_CMAP = {"H": "Blues", "MH": "PuBu",}  # colormap per variable
+TRITON_GIF_CMAP = {"H": "Blues", "MH": "PuBu", "V": "Reds"}  # colormap per variable
 TRITON_GIF_MAX_FRAMES = None  # evenly-strided timestep cap per GIF (bounds render time/file size on long runs)
 TRITON_GIF_MAX_DIM = None  # optional cap [px] on the larger grid dimension for GIF rendering; None disables spatial downsampling
 

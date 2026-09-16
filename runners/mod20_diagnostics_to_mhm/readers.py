@@ -53,7 +53,7 @@ def _domain_mask(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def resolve_window(flux_nc: Path, spinup_years: int = 1):
-    """Return (start, end) 'YYYY-MM-DD' covering full water years of the flux record.
+    """Return (start, end) 'YYYY-MM-DD' covering the flux record.
 
     Water-balance ratios assume ΔS≈0, which only holds over whole water years.
     Starting from the model's first output, a spin-up is dropped and the start is
