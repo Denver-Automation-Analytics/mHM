@@ -20,7 +20,7 @@ ROUTING_METHOD = "muskingum"  # mRM routing (mod19): "muskingum" | "adaptive" | 
 OPTI_OBJECTIVE = "kge"  # mod19 calibration objective: "nse" | "lnnse" | "nse_lnnse" | "kge" | "multi_kge" | "wnse" | "kge_q_et"
 N_ITERATIONS = 2000  # mod19 DDS optimizer trials; more = better calibration, longer runtime
 SEED = 32  # mod19 DDS random seed; -9 = clock-based (nondeterministic). Set a positive int for reproducible A/B runs.
-N_OMP_THREADS = 25  # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
+N_OMP_THREADS = 90  # OpenMP threads for mHM; requires binary built with -DCMAKE_WITH_OpenMP=ON
 PET_METHOD = "penman_monteith"  # one of: "hargreaves_samani", "oudin", "priestley_taylor", "penman_monteith"
 WANTED_GAUGE_IDS = ["11023000",]
 # Known upstream drainage area per gauge (USGS site_no -> area in square miles).

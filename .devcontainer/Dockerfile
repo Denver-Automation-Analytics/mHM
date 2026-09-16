@@ -12,17 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create the mHM development conda environment from a declarative env file
 COPY .devcontainer/env.yaml /tmp/env.yaml
-RUN conda env create -f /tmp/env.yaml && conda clean -afy
+RUN conda env create -f /tmp/env.yaml \
+    && ln -s /opt/conda/envs/mhm-dev/bin/gcc-ar /opt/conda/envs/mhm-dev/bin/ar \
+    && ln -s /opt/conda/envs/mhm-dev/bin/gcc-ranlib /opt/conda/envs/mhm-dev/bin/ranlib \
+    && conda clean -afy
 
 # Make conda activate work in non-interactive shells and activate mhm-dev by default
 RUN echo "source /opt/conda/etc/profile.d/conda.sh && conda activate mhm-dev" >> /etc/bash.bashrc \
     && echo "source /opt/conda/etc/profile.d/conda.sh && conda activate mhm-dev" >> /root/.bashrc
-
-# Install Node.js and Claude Code CLI
-RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
-    && rm -rf /var/lib/apt/lists/*
 
 # Prepend the conda env bin to PATH so tools are available without explicit activation
 ENV PATH="/opt/conda/envs/mhm-dev/bin:$PATH"

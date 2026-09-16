@@ -25,10 +25,6 @@
       }
     }
   },
-  "mounts": [
-    "source=${localEnv:USERPROFILE}/.claude,target=/root/.claude,type=bind,consistency=cached",
-    "source=${localEnv:USERPROFILE}/.claude.json,target=/root/.claude.json,type=bind,consistency=cached"
-  ],
   "remoteEnv": {
     "PATH": "/opt/conda/envs/mhm-dev/bin:${containerEnv:PATH}",
     "CMAKE_PREFIX_PATH": "/opt/conda/envs/mhm-dev",
